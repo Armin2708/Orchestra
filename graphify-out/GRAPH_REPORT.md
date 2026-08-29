@@ -1,16 +1,15 @@
-# Graph Report - agentboard-plan2  (2026-08-29)
+# Graph Report - .  (2026-08-04)
 
 ## Corpus Check
-- 946 files · ~1,289,803 words
-- Verdict: corpus is large enough that graph structure adds value.
+- cluster-only mode — file stats not available
 
 ## Summary
-- 12575 nodes · 28997 edges · 520 communities (471 shown, 49 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 187 edges (avg confidence: 0.84)
+- 11242 nodes · 26214 edges · 456 communities (413 shown, 43 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 155 edges (avg confidence: 0.84)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `ea06d5af`
+- Built from commit: `bc7babef`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -460,171 +459,113 @@
 - [[_COMMUNITY_Community 442|Community 442]]
 - [[_COMMUNITY_Community 443|Community 443]]
 - [[_COMMUNITY_Community 445|Community 445]]
-- [[_COMMUNITY_Community 451|Community 451]]
 - [[_COMMUNITY_Community 455|Community 455]]
-- [[_COMMUNITY_Community 456|Community 456]]
-- [[_COMMUNITY_Community 457|Community 457]]
-- [[_COMMUNITY_Community 458|Community 458]]
-- [[_COMMUNITY_Community 459|Community 459]]
-- [[_COMMUNITY_Community 460|Community 460]]
-- [[_COMMUNITY_Community 461|Community 461]]
-- [[_COMMUNITY_Community 462|Community 462]]
-- [[_COMMUNITY_Community 463|Community 463]]
-- [[_COMMUNITY_Community 464|Community 464]]
-- [[_COMMUNITY_Community 465|Community 465]]
-- [[_COMMUNITY_Community 466|Community 466]]
-- [[_COMMUNITY_Community 467|Community 467]]
-- [[_COMMUNITY_Community 468|Community 468]]
-- [[_COMMUNITY_Community 469|Community 469]]
-- [[_COMMUNITY_Community 470|Community 470]]
-- [[_COMMUNITY_Community 471|Community 471]]
-- [[_COMMUNITY_Community 472|Community 472]]
-- [[_COMMUNITY_Community 473|Community 473]]
-- [[_COMMUNITY_Community 474|Community 474]]
-- [[_COMMUNITY_Community 475|Community 475]]
-- [[_COMMUNITY_Community 476|Community 476]]
-- [[_COMMUNITY_Community 477|Community 477]]
-- [[_COMMUNITY_Community 478|Community 478]]
-- [[_COMMUNITY_Community 479|Community 479]]
-- [[_COMMUNITY_Community 480|Community 480]]
-- [[_COMMUNITY_Community 481|Community 481]]
-- [[_COMMUNITY_Community 482|Community 482]]
-- [[_COMMUNITY_Community 483|Community 483]]
-- [[_COMMUNITY_Community 484|Community 484]]
-- [[_COMMUNITY_Community 485|Community 485]]
-- [[_COMMUNITY_Community 486|Community 486]]
-- [[_COMMUNITY_Community 487|Community 487]]
-- [[_COMMUNITY_Community 488|Community 488]]
-- [[_COMMUNITY_Community 489|Community 489]]
-- [[_COMMUNITY_Community 490|Community 490]]
-- [[_COMMUNITY_Community 491|Community 491]]
-- [[_COMMUNITY_Community 492|Community 492]]
-- [[_COMMUNITY_Community 493|Community 493]]
-- [[_COMMUNITY_Community 494|Community 494]]
-- [[_COMMUNITY_Community 495|Community 495]]
-- [[_COMMUNITY_Community 496|Community 496]]
-- [[_COMMUNITY_Community 497|Community 497]]
-- [[_COMMUNITY_Community 498|Community 498]]
-- [[_COMMUNITY_Community 499|Community 499]]
-- [[_COMMUNITY_Community 500|Community 500]]
-- [[_COMMUNITY_Community 501|Community 501]]
-- [[_COMMUNITY_Community 502|Community 502]]
-- [[_COMMUNITY_Community 503|Community 503]]
-- [[_COMMUNITY_Community 504|Community 504]]
-- [[_COMMUNITY_Community 505|Community 505]]
-- [[_COMMUNITY_Community 506|Community 506]]
-- [[_COMMUNITY_Community 507|Community 507]]
-- [[_COMMUNITY_Community 510|Community 510]]
-- [[_COMMUNITY_Community 513|Community 513]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `openDb()` - 283 edges
-2. `_()` - 240 edges
-3. `buildServer()` - 124 edges
-4. `boundedString()` - 112 edges
-5. `parseJson()` - 98 edges
-6. `timestamp()` - 97 edges
-7. `actorIdentity` - 80 edges
-8. `canonicalHash()` - 77 edges
-9. `CodexAgentDriver` - 73 edges
-10. `AgentOsJobExecutor` - 70 edges
+1. `openDb()` - 244 edges
+2. `boundedString()` - 112 edges
+3. `buildServer()` - 101 edges
+4. `parseJson()` - 98 edges
+5. `timestamp()` - 97 edges
+6. `actorIdentity` - 80 edges
+7. `canonicalHash()` - 77 edges
+8. `CodexAgentDriver` - 73 edges
+9. `AgentOsJobExecutor` - 70 edges
+10. `reject()` - 68 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Scoped Device Pairing` --semantically_similar_to--> `PairingTicket and DeviceSession`  [INFERRED] [semantically similar]
   README.md → docs/remote-mobile-threat-control-matrix.json
-- `startDaemonOrgSync()` --calls--> `output`  [INFERRED]
-  src/org-sync/daemon-integration.ts → scripts/check-codex-protocol.mjs
-- `Service Boundary Manifest` --semantically_similar_to--> `Focused service boundaries`  [INFERRED] [semantically similar]
-  docs/agent-os-surface-inventory.json → docs/agent-os-surface-inventory.md
-- `Event Vocabulary Manifest` --semantically_similar_to--> `Events and projections`  [INFERRED] [semantically similar]
-  docs/agent-os-surface-inventory.json → docs/agent-os-surface-inventory.md
-- `UI Evidence Manifest` --semantically_similar_to--> `UI surfaces`  [INFERRED] [semantically similar]
-  docs/agent-os-surface-inventory.json → docs/agent-os-surface-inventory.md
+- `Collision Avoidance Positioning` --semantically_similar_to--> `Shared Checkout Collision Avoidance`  [INFERRED] [semantically similar]
+  .remember/recent.md → docs/value-analysis.md
+- `Vibe Kanban Worktree Flow` --semantically_similar_to--> `Model Context and Review Controls`  [INFERRED] [semantically similar]
+  docs/competitor-teardown.md → vk-workspace-view.yml
+- `Hook Inheritance Interoperability` --semantically_similar_to--> `Hook Event Execution Log`  [INFERRED] [semantically similar]
+  docs/competitor-teardown.md → vk-workspace-view.yml
+- `Subscription-First Provider Strategy` --semantically_similar_to--> `Explicit Provider API Mode`  [INFERRED] [semantically similar]
+  README.md → docs/getting-started.md
 
 ## Import Cycles
-- 3-file cycle: `src/daemon.ts -> src/org-sync/daemon-integration.ts -> src/org-sync/outbox.ts -> src/daemon.ts`
-- 3-file cycle: `src/daemon.ts -> src/org-sync/daemon-integration.ts -> src/org-sync/sync-loop.ts -> src/daemon.ts`
 - 3-file cycle: `src/provider-agent-manager.ts -> src/server.ts -> src/server-composition.ts -> src/provider-agent-manager.ts`
-- 4-file cycle: `src/daemon.ts -> src/org-sync/daemon-integration.ts -> src/org-sync/sync-loop.ts -> src/org-sync/outbox.ts -> src/daemon.ts`
 
 ## Hyperedges (group relationships)
 - **Agent OS Surface Contract Views** — docs_agent_os_surface_inventory_agent_os_surface_inventory, docs_agent_os_surface_inventory_agent_os_surface_manifest, docs_agent_os_surface_inventory_drift_check_contract [EXTRACTED 1.00]
 - **Private Beta Safety Workflow** — docs_getting_started_orchestra_beta_onboarding, docs_operator_preview_operator_preview, docs_support_preview_support_preview [INFERRED 0.85]
 - **Safe Remote Authority Model** — docs_remote_mobile_threat_control_matrix_pairing_ticket_and_device_session, docs_remote_mobile_threat_control_matrix_resource_bound_scopes, docs_remote_mobile_threat_control_matrix_resource_bound_step_up, docs_remote_mobile_threat_control_matrix_device_attributed_audit, docs_remote_mobile_threat_control_matrix_lost_device_response [EXTRACTED 1.00]
 
-## Communities (520 total, 49 thin omitted)
+## Communities (456 total, 43 thin omitted)
 
 ### Community 0 - "Database and Server Tests"
 Cohesion: 0.02
-Nodes (109): agentHomeRetentionPlugin(), AgentHomeRetentionRouteOptions, optionalBody(), optionalStringAlias(), retentionCommand(), requestBody(), AgentCredentialRow, AgentMutationPrincipal (+101 more)
+Nodes (151): DurableSessionEventScopeOptions, SessionEventScopeSource, agentHomeRetentionPlugin(), AgentHomeRetentionRouteOptions, optionalBody(), optionalStringAlias(), retentionCommand(), requestBody() (+143 more)
 
 ### Community 1 - "Conductor Agent SDK"
-Cohesion: 0.02
-Nodes (90): registerCompatibilityReadObserver(), AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID, applyAgentOsMigrations(), compressDist(), COMPRESSIBLE, ensureAgentsProviderSessionIndex(), memoizePrepare(), normalizeSchemaSql() (+82 more)
+Cohesion: 0.03
+Nodes (89): registerCompatibilityReadObserver(), applyAgentOsMigrations(), AgentSessionControlHost, registerAgentSessionControlRoutes(), PERMISSION_MODES, ensureAgentsProviderSessionIndex(), normalizeSchemaSql(), openDb() (+81 more)
 
 ### Community 2 - "Model Effort Controls"
 Cohesion: 0.04
-Nodes (108): actionFingerprint(), authorizationFromRequest(), AuthorizedProviderActionV1, AuthorizedProviderLaunch, AuthorizedProviderLaunchV1, authorizeProviderLaunchV1(), canonicalManifests, clonePlain() (+100 more)
+Nodes (106): actionFingerprint(), AuthorizedProviderActionV1, AuthorizedProviderLaunch, AuthorizedProviderLaunchV1, authorizeProviderLaunchV1(), canonicalManifests, clonePlain(), CODEX_MANAGED_ENVIRONMENT_VARIABLES_V1 (+98 more)
 
 ### Community 3 - "Daemon Lifecycle and Reaping"
 Cohesion: 0.03
-Nodes (77): AgentHomeForkOutcomeUnknownError, AgentHomeForkTarget, AgentHomeKnownForkChild, AgentHomeNativeForkProvenance, AgentHomeNativeForkResult, closedForkProvenance(), forkTargetFromEffect(), mapForkSession() (+69 more)
+Nodes (61): AgentHomeForkOutcomeUnknownError, AgentHomeForkTarget, AgentHomeKnownForkChild, AgentHomeNativeForkProvenance, AgentHomeNativeForkResult, closedForkProvenance(), forkTargetFromEffect(), mapForkSession() (+53 more)
 
 ### Community 4 - "Codex Provider Service"
 Cohesion: 0.04
-Nodes (87): agentActivity, dbTimeMs(), Agent, agentHue(), agentInk(), agentWash(), Card, Idea (+79 more)
+Nodes (91): Agent, agentHue(), agentInk(), agentWash(), Card, fetchTimeline(), Idea, initials() (+83 more)
 
 ### Community 5 - "Auto-Wake Scheduler"
 Cohesion: 0.03
-Nodes (96): addUtcDays(), AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES, AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES, AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES, AGENT_OS_COMPATIBILITY_TELEMETRY_COHORTS, AGENT_OS_COMPATIBILITY_TELEMETRY_DIAGNOSTICS, AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS, AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS (+88 more)
+Nodes (106): CompatibilityForwardPlanEntry, QuarantineInput, StoredLink, addUtcDays(), AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES, AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES, AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES, AGENT_OS_COMPATIBILITY_TELEMETRY_COHORTS (+98 more)
 
 ### Community 6 - "Token Diet Experiments"
-Cohesion: 0.06
-Nodes (30): CardTrackbookSummary(), CompactSummary, COMPLETE_STATUSES, emptyDeliveries, FAILED_STATUSES, LoadState, DeliveryCollection, DeliveryOutcome (+22 more)
+Cohesion: 0.03
+Nodes (81): CreateAgentDialog(), RenameSessionDialog(), AgentTerminalPanel(), canonicalLifecycleForWorkspace(), CanonicalLifecycleStatus(), CanonicalLifecycleView, compactId(), dispatchKinds (+73 more)
 
 ### Community 7 - "Artifact and Context Stores"
-Cohesion: 0.03
-Nodes (30): ContractDriverSessionV1, costLimit(), eventMetadata(), mappedProviderEvent(), ProviderContractAgentDriverOptionsV1, ProviderContractAgentDriverV1, ProviderContractRoutingError, ProviderContractRuntimePolicyInput (+22 more)
+Cohesion: 0.04
+Nodes (39): ClaudeAgentDriverAdapter, ClaudeAgentDriverOptions, ClaudeAgentRecord, ClaudeConductorPort, ClaudeNativeEventKind, ClaudeNativeEventSink, ClaudeNativeSessionFork, ClaudeSessionForkOptions (+31 more)
 
 ### Community 8 - "Root Package Manifest"
 Cohesion: 0.04
-Nodes (75): AgentHome(), RuntimeState, useMedia(), AGENT_HOME_EVENT_KINDS, AgentConversation, AgentHomeAction, agentHomeApi, AgentHomeApiError (+67 more)
+Nodes (76): AgentHome(), RuntimeState, useMedia(), AGENT_HOME_EVENT_KINDS, AgentConversation, AgentHomeAction, agentHomeApi, AgentHomeApiError (+68 more)
 
 ### Community 9 - "Delivery Report Domain"
-Cohesion: 0.07
-Nodes (18): durableSessionEventScope, normalizedJobIdentity(), commandReplay(), providerIdentifier(), AgentProfileService, mapAgentProfile(), boundedInteger(), ConversationService (+10 more)
+Cohesion: 0.05
+Nodes (50): durableSessionEventScope, normalizedJobIdentity(), ConversationSearchFilters, ACCESS_PROFILES, accessProfile(), AgentHomeAccessProfile, AgentSessionHistoryState, AgentSessionMode (+42 more)
 
 ### Community 10 - "Wake Meter"
-Cohesion: 0.13
-Nodes (10): CreateAgentDialog(), RenameSessionDialog(), BoardRef, NeedsYou(), severityOrder, AttentionItem, OsId, focusableSelector (+2 more)
+Cohesion: 0.04
+Nodes (78): AgentProfile, LocalOwnerApp(), CommandCenter(), CommandCenterProps, CommandCenterStatus(), preferencesFromBrowser(), savedViewsFromBrowser(), savedViewsStorageKey() (+70 more)
 
 ### Community 11 - "Review and Server Events"
 Cohesion: 0.05
-Nodes (22): AgentHomeTranscriptExporter, textField(), AgentHomeSearchService, integer(), optionalDate(), optionalText(), dispatchMatch(), JobExecutionResult (+14 more)
+Nodes (30): AgentHomeExportFormat, agentHomeExportInternals, AgentHomeTranscriptExport, AgentHomeTranscriptExporter, countRedactionMarkers(), ExportedConversationEvent, redactText(), redactValue() (+22 more)
 
 ### Community 12 - "Checkpoint Context Services"
-Cohesion: 0.11
-Nodes (16): boundedInteger(), boundedJsonObject(), boundedText(), enumValue(), futureTimestamp(), mapRow(), normalizeActor(), nullableNumber() (+8 more)
+Cohesion: 0.06
+Nodes (41): ConflictDetectionServiceBoundary, activeBoundary(), AGENT_OS_DOMAIN_SERVICE_NAMES, AgentOsActiveServiceBoundary, AgentOsDomainServiceBoundaries, AgentOsDomainServiceImplementationState, AgentOsDomainServiceName, AgentOsReservedServiceBoundary (+33 more)
 
 ### Community 13 - "SQLite Runtime Persistence"
-Cohesion: 0.09
-Nodes (64): accessProfiles, AgentSession, asStringList(), CanonicalAssignmentIdentity, canonicalError(), CanonicalLifecycleCore, CanonicalLifecycleSnapshot, Checkpoint (+56 more)
+Cohesion: 0.06
+Nodes (74): buildApprovalBody(), summarizeTrackbookDelivery(), accessProfiles, AGENT_EFFORT_LEVELS, AgentDefaultProfile, AgentDefaults, AgentEffort, AgentProviderModel (+66 more)
 
 ### Community 14 - "Product Research Notes"
 Cohesion: 0.06
-Nodes (56): AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_REASONS, assertCompatibilityMigrationFailureJournalSchemaCompatible(), assertHash(), assertIsoTimestamp(), assertNoProtectedTempObjects(), assertPlainObject(), assertPristineUnboundSidecar(), assertSafeInteger() (+48 more)
+Nodes (53): AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_REASONS, assertCompatibilityMigrationFailureJournalSchemaCompatible(), assertHash(), assertIsoTimestamp(), assertNoProtectedTempObjects(), assertPlainObject(), assertPristineUnboundSidecar(), assertSafeInteger() (+45 more)
 
 ### Community 15 - "Claude Agent Driver"
 Cohesion: 0.03
-Nodes (63): CheckpointService, mapCheckpoint(), CurrentJobAssignmentRow, FrozenJobAssignmentIdentity, mapCurrentJobAssignment(), positiveScopeId(), requiredIdentityString(), requiredIdentityVersion() (+55 more)
+Nodes (50): CheckpointService, CreateCheckpoint, mapCheckpoint(), commandFailureMessage(), CommandIdempotencyStore, CommandReceipt, CommandReceiptName, commandRequestIdentity (+42 more)
 
 ### Community 16 - "Agent OS Web API"
 Cohesion: 0.07
-Nodes (15): ManagedKnowledgePrompt, AgentOsJobExecutor, capturePatch(), ContractAwareRuntimeDriver, frozenRuntimeContract(), git(), mapRuntimeJob(), providerSessionBindingError() (+7 more)
+Nodes (16): ManagedKnowledgePrompt, AgentOsJobExecutor, capturePatch(), ContractAwareRuntimeDriver, frozenRuntimeContract(), git(), mapRuntimeJob(), mapWorkspace() (+8 more)
 
 ### Community 17 - "Trackbook User Interface"
-Cohesion: 0.03
-Nodes (80): check(), bindCodexAgentHomeForThread(), CODEX_ENV_ALLOWLIST, codexAgentHomeForThread(), CodexProviderContractRouting, codexTokenBudgetForThread(), codexWorkspaceForThread(), createDaemonProviderToolSurfaceRefresher() (+72 more)
+Cohesion: 0.05
+Nodes (52): sortJson(), stableJson(), check(), assertArtifact(), evidenceRecord(), matrixMatchesRow(), parseArtifact(), ProviderAcceptanceArtifactV1 (+44 more)
 
 ### Community 18 - "Shipped Commit Recording"
 Cohesion: 0.05
@@ -632,71 +573,71 @@ Nodes (52): addSeconds(), base64UrlCoordinate(), boundedProofPayload(), Canonica
 
 ### Community 19 - "Task Contract Model"
 Cohesion: 0.04
-Nodes (64): fmtTokens(), LocalOwnerApp(), Mark(), SettingsView, SystemMeter(), BACKLOG_PANES, BacklogPane, backlogPanes (+56 more)
+Nodes (58): authenticateLocalOwnerPassword(), setToken(), SystemInfo, SystemProviderInfo, App(), CollaborationCenter, fmtTokens(), OpenWorkView (+50 more)
 
 ### Community 20 - "Shipped History UI"
 Cohesion: 0.07
-Nodes (30): ACCESS_RANK, boardIdForCard(), boundedInteger(), boundedText(), CORE_FIELDS, criterionExtension(), CriterionRow, defaultVerifier() (+22 more)
+Nodes (27): ACCESS_RANK, boardIdForCard(), boundedInteger(), boundedText(), CORE_FIELDS, criterionExtension(), CriterionRow, defaultVerifier() (+19 more)
 
 ### Community 21 - "Runtime Supervisor"
-Cohesion: 0.06
-Nodes (94): assertExactArrayKeys(), assertLocatorLayerPolicy(), assertSafeLocatorEncoding(), assertScopeTargets(), CanonicalJsonLimits, canonicalLimits(), CONTENT_STATE_SET, CONTEXT_BUILD_STATUS_SET (+86 more)
+Cohesion: 0.09
+Nodes (75): assertExactArrayKeys(), assertLocatorLayerPolicy(), assertSafeLocatorEncoding(), assertScopeTargets(), CanonicalJsonLimits, canonicalLimits(), CONTENT_STATE_SET, CONTEXT_BUILD_STATUS_SET (+67 more)
 
 ### Community 22 - "App Auth and Telemetry"
 Cohesion: 0.05
-Nodes (43): runBoundCompatibilityMigrationOperation(), askUserQuestionInput(), askUserQuestions(), auditorRules(), compactCommandPrompt(), ConductorOptions, EDIT_TOOLS, EffortLevel (+35 more)
+Nodes (50): runBoundCompatibilityMigrationOperation(), AgentProviderCapabilities, AgentProviderCapability, agentProviderCatalog, AgentProviderModel, claudeProviderCatalog(), codexProviderCatalog(), normalizeEffort() (+42 more)
 
 ### Community 23 - "Architecture Implementation Docs"
-Cohesion: 0.08
-Nodes (46): boundedIdempotencyKey(), App(), base64url(), BrowserAuthorityMode, buildCredentialRotationRequest(), clearDeviceAuthority(), clearRejectedCurrentDeviceAuthority(), clearStagedKeyMaterial() (+38 more)
+Cohesion: 0.05
+Nodes (63): ApiError, boundedIdempotencyKey(), base64url(), buildCredentialRotationRequest(), clearDeviceAuthority(), clearRejectedCurrentDeviceAuthority(), clearStagedKeyMaterial(), clearStoredDeviceAuthority() (+55 more)
 
 ### Community 24 - "Web API Client"
 Cohesion: 0.06
-Nodes (42): CodexRequestOptions, CodexAccount, CodexAccountResponse, CodexAccountUsageResponse, CodexApprovalPolicy, CodexAppServerMethodMap, CodexModel, CodexModelListResponse (+34 more)
+Nodes (43): CodexRequestOptions, CodexAccount, CodexAccountResponse, CodexAccountUsageResponse, CodexApprovalPolicy, CodexAppServerMethodMap, CodexModel, CodexModelListResponse (+35 more)
 
 ### Community 25 - "Codex Provider RPC"
 Cohesion: 0.08
-Nodes (43): Candidate, MAX_CANONICAL_JSON_LIMITS, PlannedDocument, RepositoryDocumentIngestionReport, RetrievalDocument, PlannedKnowledge, buildCreationEqual(), buildCreationProjection() (+35 more)
+Nodes (42): Candidate, MAX_CANONICAL_JSON_LIMITS, PlannedDocument, RepositoryDocumentIngestionReport, RetrievalDocument, KnowledgeSourceIngestionReport, PlannedKnowledge, buildCreationEqual() (+34 more)
 
 ### Community 26 - "Async Queues and Policies"
 Cohesion: 0.07
-Nodes (69): PlannedChunk, ScannedDocument, ChunkBrowseRow, KnowledgeCitation, SourceRow, attestKnowledgeRetrievalResult(), boundedKnowledgeRetrievalResultPrefix(), canonicalResultJson() (+61 more)
+Nodes (69): KnowledgeCompilationRequest, KnowledgeRetrievalExecutor, KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION, KnowledgeGraphSignal, ScannedDocument, ChunkBrowseRow, KnowledgeCitation, SourceRow (+61 more)
 
 ### Community 27 - "Codex App Server Client"
-Cohesion: 0.05
-Nodes (63): AgentControlPanel(), AgentControlPanelProps, LoadedPlugin, McpServer, PluginResult, SessionModel, titles, ACCESS_PROFILES (+55 more)
+Cohesion: 0.06
+Nodes (55): AgentControlPanel(), AgentControlPanelProps, LoadedPlugin, McpServer, PluginResult, SessionModel, titles, ACCESS_PROFILES (+47 more)
 
 ### Community 28 - "Auto-Wake Scheduler"
-Cohesion: 0.03
-Nodes (106): DurableSessionEventScopeOptions, SessionEventScopeSource, AgentHomeExportFormat, agentHomeExportInternals, AgentHomeTranscriptExport, countRedactionMarkers(), ExportedConversationEvent, redactText() (+98 more)
+Cohesion: 0.06
+Nodes (24): Artifact, ArtifactStore, mapArtifact(), AttentionService, mapAttention(), ReviewDeliveryInput, RuntimeDeliveryInput, actorFromPayload() (+16 more)
 
 ### Community 29 - "CLI and Client"
-Cohesion: 0.04
-Nodes (69): CriterionOutcome, DeliveryClaim, DeliveryCriterionResult, DeliveryItem, DeliveryStatus, EffectiveCriterionOutcome, EvidenceReference, EvidenceReferenceKind (+61 more)
+Cohesion: 0.05
+Nodes (60): DeliveryClaim, DeliveryCriterionResult, DeliveryDeliverableResult, DeliveryItem, DeliveryStatus, EffectiveCriterionOutcome, EvidenceReferenceKind, addResultGaps() (+52 more)
 
 ### Community 30 - "Delivery Lifecycle Gates"
 Cohesion: 0.08
 Nodes (4): CodexThread, CodexThreadItem, isRecord(), CodexAgentDriver
 
 ### Community 31 - "Conductor Delivery Engine"
-Cohesion: 0.04
-Nodes (80): boundedString(), jsonRecord(), nullablePatchString(), stringList(), accessDecision(), ACTIVITY_VOLUME_MARKERS, appealReviewKind(), appealStatus() (+72 more)
+Cohesion: 0.08
+Nodes (39): jsonRecord(), stringList(), AuthorityControl, AuthorityEvaluation, approvalDecision(), assertIntentLinks(), authorityControl(), BASELINE_CONTROL (+31 more)
 
 ### Community 32 - "Agent OS Trackbook Docs"
-Cohesion: 0.08
-Nodes (37): canonicalKnowledgeHash(), contextBuildId(), contextManifestFingerprint(), contextRequestFingerprint(), contextUseId(), knowledgeChunkId(), knowledgeSourceSetFingerprint(), planDocument() (+29 more)
+Cohesion: 0.06
+Nodes (51): canonicalKnowledgeHash(), contextBuildId(), contextManifestFingerprint(), contextRequestFingerprint(), contextUseId(), knowledgeChunkId(), knowledgeSourceId(), knowledgeSourceSetFingerprint() (+43 more)
 
 ### Community 33 - "PTY Driver Contracts"
 Cohesion: 0.05
-Nodes (42): assertCount(), assertDuration(), assertPositiveCount(), assertPositiveDuration(), automationAllowed(), BoundedProviderControlResult, capabilityDecision(), capabilitySupported() (+34 more)
+Nodes (49): assertCount(), assertDuration(), assertPositiveCount(), assertPositiveDuration(), automationAllowed(), BoundedProviderControlResult, capabilityDecision(), capabilitySupported() (+41 more)
 
 ### Community 34 - "Path Overlap Detection"
-Cohesion: 0.13
-Nodes (9): MemoryRuntimePersistence, OsId, ProcessOutputChunk, BackpressuredPersistence, supervisors, until(), waitForOutput(), waitForTerminal() (+1 more)
+Cohesion: 0.07
+Nodes (30): mapProcess(), SqliteRuntimePersistence, MemoryRuntimePersistence, MemoryWorkspaceStore, RuntimeState, signalNames, statusForExit(), terminalStatuses (+22 more)
 
 ### Community 35 - "Claude Runtime Driver"
-Cohesion: 0.09
-Nodes (9): CodexTransportListener, connect(), FakeTransport, clientInfo, clients, codexSupervisors, ControlledTransport, initializeResult (+1 more)
+Cohesion: 0.07
+Nodes (13): CodexByteTransport, CodexTransportClose, CodexTransportListener, CodexUnsubscribe, FakeTransport, FakeTransport, RecordingPort, clientInfo (+5 more)
 
 ### Community 36 - "Web API Client"
 Cohesion: 0.05
@@ -707,220 +648,228 @@ Cohesion: 0.07
 Nodes (54): adoptLegacyAgent(), AGENT_OS_COMPATIBILITY_FORWARD_PLAN, AGENT_OS_COMPATIBILITY_VALIDATION_QUERIES, agentProfileSnapshot(), AmbiguousCompatibilityRowError, applyCompatibilityForwardMigration(), assertCompatibilityEvidenceSchemaCompatible(), assertCompatibilityPrerequisites() (+46 more)
 
 ### Community 38 - "Daemon Lease and Approval"
-Cohesion: 0.14
-Nodes (16): AcceptedAnswerArtifact, CanonicalDiscussionKnowledgePromotionAdapter, DiscussionKnowledgePromotionError, DiscussionKnowledgePromotionErrorCode, ERROR_MESSAGES, fail(), nonEmpty(), PromotionEvidenceRow (+8 more)
+Cohesion: 0.06
+Nodes (37): AcceptedAnswerArtifact, CanonicalDiscussionKnowledgePromotionAdapter, DiscussionKnowledgePromotionError, DiscussionKnowledgePromotionErrorCode, ERROR_MESSAGES, fail(), nonEmpty(), PromotionEvidenceRow (+29 more)
 
 ### Community 39 - "Codex Server Requests"
-Cohesion: 0.10
-Nodes (33): acceptanceMatches(), assessDeclaredProviderCompatibilityV1(), compatibilityError(), DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1, DeclaredProviderCompatibilityAssessmentV1, DeclaredProviderCompatibilityBlockerV1, DeclaredProviderCompatibilityEntryV1, DeclaredProviderCompatibilityEvidenceV1 (+25 more)
+Cohesion: 0.06
+Nodes (54): acceptanceMatches(), assessDeclaredProviderCompatibilityV1(), compatibilityError(), DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1, DeclaredProviderCompatibilityAssessmentV1, DeclaredProviderCompatibilityBlockerV1, DeclaredProviderCompatibilityContractV1, DeclaredProviderCompatibilityEntryV1 (+46 more)
 
 ### Community 40 - "Roadmap and Milestones UI"
-Cohesion: 0.06
-Nodes (38): ApplyTaskContractTemplateResult, assertCardId(), auditShape(), BUILT_IN_TASK_CONTRACT_TEMPLATE_IDS, BuiltInTaskContractTemplateId, clone(), ContractBuildInput, findTemplate() (+30 more)
+Cohesion: 0.05
+Nodes (41): RenderAgentBriefInput, ApplyTaskContractTemplateResult, assertCardId(), auditShape(), BUILT_IN_TASK_CONTRACT_TEMPLATE_IDS, BuiltInTaskContractTemplateId, clone(), ContractBuildInput (+33 more)
 
 ### Community 41 - "Delivery Result Mutations"
-Cohesion: 0.02
-Nodes (9): _(), checkReady(), extrema(), hslToRgb(), hue2rgb(), quadRoots(), roundValues(), searchAnimations() (+1 more)
+Cohesion: 0.10
+Nodes (60): accessNeed(), accessNeedArray(), array(), boolean(), ContractDeliverable, ContractDependencyRule, ContractVerifierKind, CriterionVerifier (+52 more)
 
 ### Community 42 - "Codex App Server Client"
-Cohesion: 0.09
-Nodes (27): createDaemonProviderToolSurface(), ProviderSupportState, DoctorExecutableIdentity, buildDeclaredProviderCapabilityMatrix(), createDeclaredProviderToolRegistry(), DeclaredProviderCapability, DeclaredProviderEvidence, doctorCheck() (+19 more)
+Cohesion: 0.06
+Nodes (41): actorId(), idempotencyKey(), optionalText(), sessionToolPlugin(), SessionToolRouteOptions, text(), SessionToolPolicyRule, ToolInvocationProvenance (+33 more)
 
 ### Community 43 - "Agent Naming and Providers"
-Cohesion: 0.04
-Nodes (41): ACTIVE_JOB_STATUSES, ACTIVE_SESSION_STATUSES, assignmentConflict(), AssignmentRow, CardScope, CreateJobAssignment, immutableAssignmentIdentity(), JOB_ASSIGNMENT_STATUSES (+33 more)
+Cohesion: 0.06
+Nodes (36): ACTIVE_JOB_STATUSES, ACTIVE_SESSION_STATUSES, assignmentConflict(), AssignmentRow, CardScope, CreateJobAssignment, immutableAssignmentIdentity(), JOB_ASSIGNMENT_STATUSES (+28 more)
 
 ### Community 44 - "Shipping Queue Gates"
-Cohesion: 0.09
-Nodes (46): CARD_COLUMNS, claimCard(), ClaimCardInput, createCard(), CreateCardInput, failStaleOrMissing(), getCard(), moveCard() (+38 more)
+Cohesion: 0.05
+Nodes (44): approval(), CLAUDE_PROVIDER_CONFIGURATION_FINGERPRINT_V1, CLAUDE_PROVIDER_LIFECYCLE_EVIDENCE_V1, ClaudeProviderAdapterOptionsV1, ClaudeProviderDriverPortV1, ClaudeProviderExecutableOptionsV1, createClaudeProviderAdapterV1(), discoverClaudeProviderExecutableV1() (+36 more)
 
 ### Community 45 - "Agent OS Runtime"
-Cohesion: 0.12
-Nodes (18): commandKey(), discussionApi, DiscussionClient, DiscussionListQuery, DiscussionPostNode, DiscussionSnapshot, DiscussionState, DiscussionSummary (+10 more)
+Cohesion: 0.05
+Nodes (37): AgentKnowledgeManifest(), CollaborationTab, commandKey(), discussionApi, DiscussionClient, DiscussionListQuery, DiscussionPostNode, DiscussionSnapshot (+29 more)
 
 ### Community 46 - "Codex App Server Supervisor"
 Cohesion: 0.06
-Nodes (44): DeviceCredentialIssue, DevicePublicKeyJwk, DeviceSessionRepository, createRemoteMutationAuditEnvelope(), createRemoteMutationDenialAuditEnvelope(), RemoteDevicePrincipal, auditId(), authenticatedDevice() (+36 more)
+Nodes (46): DeviceCredentialIssue, DevicePublicKeyJwk, DeviceSessionRepository, createRemoteMutationAuditEnvelope(), createRemoteMutationDenialAuditEnvelope(), RemoteDevicePrincipal, auditId(), authenticatedDevice() (+38 more)
 
 ### Community 47 - "Policy Engine"
 Cohesion: 0.05
-Nodes (45): DeliveryListFilter, DeliveryTrackbookFilterBar(), FILTERS, JobDeliveryDetail(), label(), AcceptanceCriterion, Artifact, ContextItem (+37 more)
+Nodes (38): eventJobId(), DeliveryListFilter, DeliveryTrackbookFilterBar(), FILTERS, JobDeliveryDetail(), label(), DeliveryEvidence, DeliveryOutcome (+30 more)
 
 ### Community 48 - "Workspace Store"
-Cohesion: 0.09
-Nodes (26): checkExecutable(), checkRemediation(), DoctorCliCheck, DoctorCliDeps, DoctorCliReport, formatDoctorReport(), isReadinessReport(), registerDoctorCommand() (+18 more)
+Cohesion: 0.07
+Nodes (46): checkExecutable(), checkRemediation(), DoctorCliCheck, DoctorCliDeps, DoctorCliReport, formatDoctorReport(), isReadinessReport(), registerDoctorCommand() (+38 more)
 
 ### Community 49 - "Message Presentation"
 Cohesion: 0.06
-Nodes (44): attributionFor(), AuthorizedServiceBoundaryContext, authorizeServiceBoundary(), BaseRule, createDefaultRemoteAuthorizationPolicy(), DEFAULT_PHONE_SCOPES, DEFAULT_REMOTE_POLICY_RULES, deny() (+36 more)
+Nodes (43): attributionFor(), AuthorizedServiceBoundaryContext, authorizeServiceBoundary(), BaseRule, createDefaultRemoteAuthorizationPolicy(), DEFAULT_PHONE_SCOPES, deny(), digestRemoteMutation() (+35 more)
 
 ### Community 50 - "Card Trackbook Summary"
-Cohesion: 0.04
-Nodes (55): ReconcileAgentHomeFork, RunSessionAction, actorIdentity, AttentionService, mapAttention(), CanonicalConflictDiscussionAdapter, DiscussionAttentionWakeAdapter, AppendConversationEvent (+47 more)
+Cohesion: 0.05
+Nodes (43): ReconcileAgentHomeFork, RunSessionAction, actorIdentity, CanonicalConflictDiscussionAdapter, DiscussionAttentionWakeAdapter, AppendConversationEvent, CreateConversation, UpdateConversation (+35 more)
 
 ### Community 51 - "Board CLI"
-Cohesion: 0.04
-Nodes (99): AcceptedDecisionKnowledgeEntryInput, assertSyntacticRelationship(), BlameLine, callablePropertyDeclarationAt(), CanonicalAuthor, changedSelectedPaths(), closesStatementControlCondition(), closingBrace() (+91 more)
+Cohesion: 0.06
+Nodes (47): AcceptedDecisionKnowledgeEntryInput, BlameLine, CanonicalAuthor, chunkReplayCompatible(), closesStatementControlCondition(), CODE_EXTENSIONS, controlConditionPrefix(), CREDENTIAL_NAMES (+39 more)
 
 ### Community 52 - "Hook Installation"
-Cohesion: 0.08
-Nodes (23): attestOperationsRecoverySchema(), bounded(), classifyOperationsFailure(), failureCode(), FailureDisposition, FailureMode, installOperationsRecoverySchema(), normalizeSchemaSql() (+15 more)
+Cohesion: 0.07
+Nodes (26): attestOperationsRecoverySchema(), bounded(), classifyOperationsFailure(), failureCode(), FailureDisposition, FailureMode, installOperationsRecoverySchema(), normalizeSchemaSql() (+18 more)
 
 ### Community 53 - "Web Push Registration"
-Cohesion: 0.05
-Nodes (56): acceptanceBlockers(), AcceptDeliveryInput, addResultGap(), AttachRuntimeScopeInput, boundedObjectArray(), boundedString(), boundedStringArray(), CreateDeliveryReportLinks (+48 more)
+Cohesion: 0.06
+Nodes (45): AcceptDeliveryInput, addResultGap(), AttachRuntimeScopeInput, CreateDeliveryReportLinks, CriterionOutcome, DeliveryAskedSnapshot, DeliveryClaimInput, DeliveryItemInput (+37 more)
 
 ### Community 54 - "Artifact Store"
 Cohesion: 0.08
 Nodes (41): boundedInteger(), collectLocatedRecords(), ERROR_MESSAGES, exactKeys(), execute(), fail(), GitNexusKnowledgeAdapter, GitNexusKnowledgeRequest (+33 more)
 
 ### Community 55 - "Milestone Status Evidence"
-Cohesion: 0.08
-Nodes (6): CodexAppServerClient, CodexRpcId, CodexAppServerSupervisor, CodexUnsubscribe, unsubscribe(), FakeTransport
+Cohesion: 0.09
+Nodes (8): Deferred, CodexAppServerClient, CodexDiagnostic, CodexMethodParams, CodexMethodResult, CodexRpcId, CodexAppServerSupervisor, unsubscribe()
 
 ### Community 56 - "Hook Output and Timing"
 Cohesion: 0.07
 Nodes (43): allowlistedEnvironment(), ApprovalMode, ApprovalObservation, assertExactSourceCommit(), assertInside(), assertSafeRoot(), childEnvironment(), CodexRuntime (+35 more)
 
 ### Community 57 - "Canonical Orchestration Service"
-Cohesion: 0.04
-Nodes (60): AgentBriefBlockerPath, AgentBriefDependency, AgentBriefSelection, TaskContractTemplateContract, JobAssignmentCommandResult, JobMarketAssignment, ContractAccessNeed, JobMarketBudgets (+52 more)
+Cohesion: 0.05
+Nodes (43): AgentBriefBlockerPath, AgentBriefDependency, JobAssignmentCommandResult, JobMarketAssignment, ContractValidation, JobMarketBudgets, JobMarketConstraints, JobMarketDependency (+35 more)
 
 ### Community 58 - "Coordination Core Concepts"
-Cohesion: 0.08
-Nodes (34): deliveryTrackbookPlugin(), integerArray(), askedFields(), assertCriterionDeliverables(), boundedContractStrings(), compatibilityCriteria(), compatibilityDeliverables(), compatibilityRecords() (+26 more)
+Cohesion: 0.13
+Nodes (23): integerArray(), askedFields(), assertCriterionDeliverables(), boundedContractStrings(), compatibilityCriteria(), compatibilityDeliverables(), compatibilityRecords(), contractText() (+15 more)
 
 ### Community 59 - "Web TypeScript Config"
 Cohesion: 0.07
-Nodes (23): createEventQueue(), currentOptionValue(), EventQueueV1, KIMI_ACP_PROTOCOL_VERSION_V1, KimiAcpAccessProfileValuesV1, KimiAcpConnectionV1, KimiAcpDriverOptionsV1, KimiAcpDriverPortV1 (+15 more)
+Nodes (24): createEventQueue(), currentOptionValue(), EventQueueV1, KIMI_ACP_PROTOCOL_VERSION_V1, KimiAcpAccessProfileValuesV1, KimiAcpConnectionV1, KimiAcpDriverOptionsV1, KimiAcpDriverPortV1 (+16 more)
 
 ### Community 60 - "Durable Job Scheduler"
-Cohesion: 0.08
-Nodes (48): ApiError, BoardMessage, Thread, ConfirmDialog(), MessageBody(), MessageComposer(), Props, mailDate() (+40 more)
+Cohesion: 0.14
+Nodes (12): boundedString(), nullablePatchString(), confidence(), identifier(), nonEmptyStringList(), optionalIso(), OrganizationAssuranceService, recordArray() (+4 more)
 
 ### Community 61 - "Mobile PWA Features"
 Cohesion: 0.05
-Nodes (39): PolicyOperation, BoundedAsyncQueue, CodexServerRequestHandlerResult, codexApprovalPolicyHandler(), commandText(), filePath(), operationFor(), APPROVAL_METHODS (+31 more)
+Nodes (41): PolicyOperation, CODEX_REQUEST_UNHANDLED, codexApprovalPolicyHandler(), commandText(), filePath(), operationFor(), APPROVAL_METHODS, CODEX_UNSUBSCRIBE_RELEASE_STATUSES (+33 more)
 
 ### Community 62 - "Token Telemetry"
-Cohesion: 0.26
-Nodes (10): DEFAULT_MATRIX, DEFAULT_REQUIREMENTS, DEFAULT_ROOT, atomicWriteFresh(), hasSymlinkComponent(), importFreshArtifact(), importQa018Bundle(), relativeInside() (+2 more)
+Cohesion: 0.08
+Nodes (40): betaQualitySigningPayload(), DEFAULT_BETA_QUALITY_TRUST_ROOTS, exactKeys(), hasSymlinkComponent(), invariant(), regularJsonFile(), SCRIPT_DIRECTORY, sha256() (+32 more)
 
 ### Community 63 - "Agent OS CLI"
-Cohesion: 0.05
-Nodes (44): optionalBoundedString(), mapContext(), parseJson(), allocation(), authorityDecision(), AuthorityPolicy, boundedInteger(), CommandReplay (+36 more)
+Cohesion: 0.10
+Nodes (10): allocation(), boundedInteger(), constraintStringList(), identifier(), mapRequired(), optionalIsoTimestamp(), OrganizationService, positiveInteger() (+2 more)
 
 ### Community 64 - "Web Package Manifest"
-Cohesion: 0.04
-Nodes (81): approval(), ClaudeProviderExecutableOptionsV1, discoverClaudeProviderExecutableV1(), DriverSessionBindingV1, exactClaudeVersion(), inspectClaudeProviderExecutableV1(), metadataString(), minimalVersionEnvironment() (+73 more)
+Cohesion: 0.08
+Nodes (42): defineKimiProviderCandidateReadinessV1(), discoverKimiProviderExecutableV1(), inspectKimiProviderCandidateV1(), KIMI_ACP_IMPLEMENTATION_EVIDENCE_V1, KimiProviderAdapterOptionsV1, KimiProviderCandidateInspectionOptionsV1, KimiProviderExecutableOptionsV1, KimiProviderReadinessObservationV1 (+34 more)
 
 ### Community 65 - "Codex Event Subscriptions"
 Cohesion: 0.06
-Nodes (36): DeviceScope, VapidKeys, bounded(), deliverRemotePushOutbox(), digest(), grantTicketResources(), hasBoardGrant(), inQuietWindow() (+28 more)
+Nodes (33): VapidKeys, bounded(), deliverRemotePushOutbox(), digest(), grantTicketResources(), hasBoardGrant(), inQuietWindow(), integrationRules (+25 more)
 
 ### Community 66 - "Board Domain UI"
-Cohesion: 0.13
-Nodes (4): remoteCanUse(), BuildServerRemoteAdversarialTarget, AdversarialAction, AdversarialObservation
+Cohesion: 0.14
+Nodes (3): BuildServerRemoteAdversarialTarget, AdversarialAction, AdversarialObservation
 
 ### Community 67 - "Agent Terminal UI"
-Cohesion: 0.10
-Nodes (36): CompiledContextCitation, CompiledContextDocument, KnowledgeCompilationResult, KnowledgeSelectionRationale, RenderedBlock, RenderedDocuments, AmbientSessionStartKnowledgeBridgeInput, citationMap() (+28 more)
+Cohesion: 0.09
+Nodes (36): CompiledContextCitation, CompiledContextDocument, KnowledgeCompilationResult, KnowledgeSelectionRationale, KNOWLEDGE_COMPILER_STABLE_PREFIXES, RenderedBlock, RenderedDocuments, AmbientSessionStartKnowledgeBridgeInput (+28 more)
 
 ### Community 68 - "Agent Terminal UI"
 Cohesion: 0.07
-Nodes (23): ActiveWorkRegistration, DispatchResult, OperationsRetentionPolicy, OutboxDelivery, assertOperationsShutdownClean(), BackgroundWorkerDiagnostics, boundedMilliseconds(), isRetentionAuthorization() (+15 more)
+Nodes (21): ActiveWorkRegistration, DispatchResult, OperationsRetentionPolicy, OutboxDelivery, BackgroundWorkerDiagnostics, boundedMilliseconds(), isRetentionAuthorization(), OperationsOutboxWorker (+13 more)
 
 ### Community 69 - "Provider Usage Interface"
-Cohesion: 0.07
-Nodes (32): Deferred, CODEX_REQUEST_UNHANDLED, CodexAppServerClientOptions, CodexAppServerPort, CodexClientClose, CodexClientState, CodexConnectionClosedError, CodexPayloadTooLargeError (+24 more)
+Cohesion: 0.05
+Nodes (30): BoundedAsyncQueue, CodexAppServerClientOptions, CodexAppServerPort, CodexClientClose, CodexClientState, CodexConnectionClosedError, CodexPayloadTooLargeError, CodexRequestTimeoutError (+22 more)
 
 ### Community 70 - "Remote Access and Auth"
-Cohesion: 0.10
-Nodes (22): AgentProviderCapabilities, ADJ, ANIMAL, generateName(), testerName(), ACCESS_PROFILES, AccessProfile, AgentOsAgentControl (+14 more)
+Cohesion: 0.06
+Nodes (34): AgentDefaultEffort, AgentDefaultProfile, AgentDefaults, AgentDefaultsValidationError, AgentType, agentTypeForRole(), defaultsForRole(), emptyAgentDefaults() (+26 more)
 
 ### Community 71 - "Codex Process Transport"
-Cohesion: 0.06
-Nodes (41): DiscussionQuery, DiscussionRouteOptions, listFilter(), mutation(), optionalCsv(), optionalInteger(), optionalLinks(), optionalMembers() (+33 more)
+Cohesion: 0.07
+Nodes (39): DiscussionQuery, DiscussionRouteOptions, listFilter(), mutation(), optionalCsv(), optionalInteger(), optionalLinks(), optionalMembers() (+31 more)
 
 ### Community 72 - "Agent OS Architecture"
-Cohesion: 0.10
-Nodes (41): constantTimeEquals(), hashToken(), HubDevice, MintDeviceInput, mintDeviceToken(), revokeDevice(), verifyDeviceToken(), buildHubServer() (+33 more)
+Cohesion: 0.06
+Nodes (34): KNOWLEDGE_HASH_DOMAINS, KnowledgeContractError, KnowledgeContractErrorCode, CONTEXT_SELECTION_REASONS, ContextBudget, ContextBudgetLimit, ContextBudgetUsage, ContextBudgetUsageSection (+26 more)
 
 ### Community 73 - "Launch and Usage Notes"
 Cohesion: 0.08
-Nodes (5): Conductor, createInput(), supportedModelsWithTimeout(), transcriptSig(), resolvePreferredClaudeExecutableV1()
+Nodes (4): ClaudeAgentHomeBinding, Conductor, createInput(), UsageSplit
 
 ### Community 74 - "Agent Defaults and Settings"
-Cohesion: 0.06
-Nodes (41): BUSINESS_LOOKUP_KEYS, CLOUD_LOOKUP_KEYS, consoleSyncLogger, createCheckoutSession(), CreateCheckoutSessionParams, createPortalSession(), CreatePortalSessionParams, DerivedQuantities (+33 more)
+Cohesion: 0.11
+Nodes (12): acceptanceBlockers(), boundedObjectArray(), boundedString(), boundedStringArray(), DeliveryReportService, evidenceKind(), evidenceScopeMatches(), inferReferenceKind() (+4 more)
 
 ### Community 75 - "Model Effort Controls"
-Cohesion: 0.05
-Nodes (64): array(), stringArray(), BoardKnowledgeRepository, git(), RepositoryCandidate, resolveBoardKnowledgeRepository(), allowedAccessScopes(), assertBoard() (+56 more)
+Cohesion: 0.09
+Nodes (38): allowedAccessScopes(), assertBoard(), assertCurrentRequestTargetsAuthority(), assertDocumentsAndFts(), assertNoOrphanFtsRows(), assertPrerequisiteSchema(), assertRebuildableFts(), assertRetainedSourceTargetsAuthority() (+30 more)
 
 ### Community 76 - "Catch-up and Commands Tests"
-Cohesion: 0.08
-Nodes (30): CodexRateLimitSnapshot, CodexRateLimitWindow, CodexApprovalDecision, CodexSessionForkOptions, CodexSessionForkResult, CodexSessionUpdate, approval(), CODEX_PROTOCOL_CONFIGURATION_FINGERPRINT_V1 (+22 more)
+Cohesion: 0.07
+Nodes (35): CodexApprovalDecision, approval(), CODEX_PROTOCOL_CONFIGURATION_FINGERPRINT_V1, CodexProviderAdapterOptionsV1, CodexProviderDriverPortV1, CodexProviderRuntimePortV1, createCodexProviderAdapterV1(), executableCandidates() (+27 more)
 
 ### Community 77 - "Launch Tests"
 Cohesion: 0.05
 Nodes (43): additionalProperties, const, additionalProperties, properties, required, type, const, pattern (+35 more)
 
 ### Community 78 - "Codex Transport Tests"
-Cohesion: 0.10
+Cohesion: 0.11
 Nodes (6): accessForPermissionMode(), enabledCapabilities(), isAccessProfile(), permissionModeForAccess(), ProviderAgentManager, safeProvider()
 
 ### Community 79 - "Security and UX Audits"
-Cohesion: 0.09
-Nodes (33): knowledgeSourceId(), GraphifyAutoSync, GraphifyAutoSyncDeps, boardRoot(), documentTitle(), git(), graphChunks(), GraphDocument (+25 more)
+Cohesion: 0.06
+Nodes (35): AUTHORITY_CONTROLS, authorityDecision(), AuthorityPolicy, CommandInput, CommandReplay, deniedEvaluation(), mapAuthorityPolicy(), mapMembership() (+27 more)
 
 ### Community 80 - "Provider Launch Controls"
 Cohesion: 0.08
-Nodes (38): ambientClaudeCheck(), assertManagedEnvironmentCompatibility(), classifyCodexCliVersion(), classifyVersion(), claudeBundledPolicy(), ClaudeSdkDescriptorDeps, collectEnvironmentProbe(), compareSemver() (+30 more)
+Nodes (37): ambientClaudeCheck(), classifyCodexCliVersion(), classifyVersion(), claudeBundledPolicy(), ClaudeSdkDescriptorDeps, collectEnvironmentProbe(), compareSemver(), CompatibilityCheck (+29 more)
 
 ### Community 81 - "Release Launch Gates"
-Cohesion: 0.10
-Nodes (29): BillingPage(), TIER_LABEL, billingPrimaryAction(), checkoutOutcome(), createHubCheckout(), createHubPortal(), createHubProject(), getHubEntitlements() (+21 more)
+Cohesion: 0.07
+Nodes (32): AgentCredentialRow, CanonicalSessionRow, header(), positiveHeaderInteger(), requireAgentOwnsDelivery(), resolveAgentMutationPrincipal(), AddReviewCommentInput, array() (+24 more)
 
 ### Community 82 - "Archived Session History"
-Cohesion: 0.21
-Nodes (13): AttentionItem, argumentCount(), durableActor(), mapInvocation(), nonNegativeInteger(), normalizeRules(), optionalDigest(), optionalSafeId() (+5 more)
+Cohesion: 0.11
+Nodes (27): AttentionItem, argumentCount(), durableActor(), invocationDigest(), invocationStatuses, mapInvocation(), nonNegativeInteger(), normalizeRules() (+19 more)
 
 ### Community 83 - "Human Attention Interface"
-Cohesion: 0.13
-Nodes (7): clone(), positiveDimension(), RuntimeSupervisor, ProcessPort, ProcessRecord, RuntimeEvent, RuntimeStreamItem
+Cohesion: 0.12
+Nodes (7): clone(), positiveDimension(), RuntimeSupervisor, ProcessPort, RuntimeStreamItem, roots, supervisors
 
 ### Community 84 - "Git Shipping History"
 Cohesion: 0.12
 Nodes (39): appendDogfoodEvent(), appendDogfoodObservation(), assertActiveBinding(), assertCandidateSource(), assertOutputDirectory(), copyEvidence(), DEFAULT_PLAN, DEFAULT_ROOT (+31 more)
 
 ### Community 85 - "Driver Registry"
-Cohesion: 0.06
-Nodes (31): ComputedWorkspaceConflictService, ConflictDetectionServiceBoundary, assignmentEventPayload(), assignmentIdentityFromRow(), JobScheduler, mapJob(), normalizeJobAssignment(), activeBoundary() (+23 more)
+Cohesion: 0.17
+Nodes (6): timestamp(), assignmentEventPayload(), assignmentIdentityFromRow(), JobScheduler, mapJob(), normalizeJobAssignment()
+
+### Community 86 - "SQLite Workspace Store"
+Cohesion: 0.10
+Nodes (8): acquireDaemonLease(), DaemonLease, ActiveFixture, Fault, FIXED_NOW, LIFECYCLE_TRANSITIONS, LifecycleEvidence, ProductionOperationsChaosTarget
 
 ### Community 87 - "Release Feature Map"
-Cohesion: 0.10
-Nodes (55): AcceptedDecisionKnowledgeArtifact, acceptedDecisionKnowledgePlans(), assertAncestor(), assertCommit(), assertDeliveryEvidence(), assertRepositoryStable(), assertStructuralLogicalCompatibility(), blamePlans() (+47 more)
+Cohesion: 0.14
+Nodes (35): AcceptedDecisionKnowledgeArtifact, assertAncestor(), assertCommit(), assertDeliveryEvidence(), assertRepositoryStable(), assertStructuralLogicalCompatibility(), blamePlans(), boundedInteger() (+27 more)
 
 ### Community 88 - "Timeline UI"
-Cohesion: 0.13
-Nodes (14): activityCategory(), bounded(), canonical(), count(), identifier(), invalid(), now(), numberValue() (+6 more)
+Cohesion: 0.14
+Nodes (17): activityCategory(), bounded(), BudgetEnforcement, budgetScope(), cachedSemantics(), canonical(), count(), identifier() (+9 more)
 
 ### Community 89 - "PWA Icon Generator"
-Cohesion: 0.08
-Nodes (6): CodexSupervisorLifecycleEvent, CodexSupervisorState, drivers, FakeService, startResponse(), FakeSupervisor
+Cohesion: 0.07
+Nodes (8): CodexServerNotification, CodexServerRequest, CodexThreadStartResponse, CodexRuntimeService, drivers, FakeService, startResponse(), NativeService
 
 ### Community 90 - "Board Command Menu"
-Cohesion: 0.08
-Nodes (12): CodexServerNotification, CodexServerRequest, CodexThreadStartResponse, actor, capture(), createScope(), drivers, isRecord() (+4 more)
+Cohesion: 0.06
+Nodes (24): ContractAccessNeed, OpenWorkApiError, OpenWorkDispatch, activeFilterChips(), contractVersionIsStale(), formatCents(), formatDuration(), formatInteger() (+16 more)
+
+### Community 91 - "Root TypeScript Config"
+Cohesion: 0.11
+Nodes (4): CodexManagedAgentRuntime, codexRoleInstructions(), emptyCodexUsage(), parseObject()
 
 ### Community 92 - "Agent Terminal UI"
-Cohesion: 0.03
-Nodes (67): AgentHomeRetentionCutoffs, AgentHomeRetentionHooks, AgentHomeRetentionPolicy, AgentHomeRetentionRun, AgentHomeRetentionService, artifactEvidenceReferenceSql(), collectRawArtifactReferences(), ConfigureAgentHomeRetentionInput (+59 more)
+Cohesion: 0.08
+Nodes (29): AgentHomeRetentionCutoffs, AgentHomeRetentionHooks, AgentHomeRetentionPolicy, AgentHomeRetentionRun, AgentHomeRetentionService, artifactEvidenceReferenceSql(), collectRawArtifactReferences(), ConfigureAgentHomeRetentionInput (+21 more)
 
 ### Community 93 - "Product Value Research"
-Cohesion: 0.09
-Nodes (37): adapterIndexCommits(), authorityMicros(), baseFits(), candidateFrom(), candidateScore(), choose(), citationFrom(), collectCandidates() (+29 more)
+Cohesion: 0.10
+Nodes (34): adapterIndexCommits(), authorityMicros(), baseFits(), candidateFrom(), candidateScore(), choose(), citationFrom(), collectCandidates() (+26 more)
 
 ### Community 94 - "Autoship Integration Tests"
 Cohesion: 0.12
@@ -928,23 +877,23 @@ Nodes (33): aggregateRuntimeRuns(), buildResult(), capture(), directorySummary()
 
 ### Community 95 - "Token Diet Experiments"
 Cohesion: 0.13
-Nodes (36): artifactIdentity(), artifactPackageManifest(), assertExactCoreRowsPreserved(), assertHookState(), assertPreservedDomainData(), assertSnapshot(), auditInstalledArtifact(), availablePort() (+28 more)
+Nodes (35): artifactIdentity(), artifactPackageManifest(), assertExactCoreRowsPreserved(), assertHookState(), assertPreservedDomainData(), assertSnapshot(), auditInstalledArtifact(), availablePort() (+27 more)
 
 ### Community 96 - "Codex Integration Docs"
-Cohesion: 0.10
-Nodes (35): ArtifactRow, assertAutoshipCandidateCleaned(), AutoshipWorktreeIdentity, captureAutoshipWorktreeIdentity(), DeliveryArtifactAttestation, DeliveryAutoshipCompletion, DeliveryAutoshipIntent, DeliveryAutoshipReconciliation (+27 more)
+Cohesion: 0.07
+Nodes (33): ArtifactRow, assertSafeRetainedArtifact(), assertSafeVerificationOutput(), AutoshipWorktreeIdentity, canonicalJson(), DeliveryArtifactAttestation, DeliveryAutoshipCompletion, DeliveryAutoshipIntent (+25 more)
 
 ### Community 97 - "Product Value Analysis"
 Cohesion: 0.09
-Nodes (23): KnowledgeCompilationRequest, KnowledgeCompiler, KnowledgeCompilerError, KnowledgeRetrievalExecutor, AmbientSessionStartBridgeEnvelope, KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION, KnowledgeContextBridgeError, KnowledgeGraphSignal (+15 more)
+Nodes (18): KNOWLEDGE_COMPILER_CONTRACT_VERSION, KnowledgeCompiler, KnowledgeCompilerError, AmbientSessionStartBridgeEnvelope, contextBudget(), deliveryContractSnapshot(), fixedContextBudget(), KnowledgeRuntimeIntegration (+10 more)
 
 ### Community 98 - "Product Value Audit"
 Cohesion: 0.06
 Nodes (33): ARCHITECTURE_DIRECTORY_NAMES, ARCHITECTURE_FILE_STEMS, assertDatabaseScopeStable(), bareRepositoryBoundaryPresent(), classifyDocument(), CONVENTION_DIRECTORY_NAMES, CONVENTION_FILE_STEMS, CREDENTIAL_FILE_NAMES (+25 more)
 
 ### Community 99 - "Roadmap and Milestones UI"
-Cohesion: 0.10
-Nodes (30): createLocalOwnerChallengeTracker(), LOCAL_OWNER_CHALLENGE_DIGESTS, LOCAL_OWNER_CHALLENGE_PATHS, localOwnerChallengeEndpointDigest(), recordLocalOwnerHttpFailure(), REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS, ACCESSIBILITY_GATES, BETA_EXPERIENCE_BUDGETS_MS (+22 more)
+Cohesion: 0.08
+Nodes (32): createLocalOwnerChallengeTracker(), LOCAL_OWNER_CHALLENGE_DIGESTS, LOCAL_OWNER_CHALLENGE_PATHS, localOwnerChallengeEndpointDigest(), recordLocalOwnerHttpFailure(), REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS, ACCESSIBILITY_GATES, BETA_EXPERIENCE_BUDGETS_MS (+24 more)
 
 ### Community 100 - "Trackbook UI Verification"
 Cohesion: 0.10
@@ -955,48 +904,52 @@ Cohesion: 0.07
 Nodes (29): canonicalize(), canonicalJson(), contractSha256(), manifestContractBinding(), ActionPin, Contract, EvidenceRecord, evidenceScript (+21 more)
 
 ### Community 102 - "Checkpoint Service"
-Cohesion: 0.11
-Nodes (34): acquireWriterLock(), assertTransactionTargets(), CLAUDE_HOOKS, CODEX_HOOKS, ensurePhysicalBase(), ensurePhysicalParent(), fsyncDirectory(), hasMarker() (+26 more)
+Cohesion: 0.12
+Nodes (32): acquireWriterLock(), assertTransactionTargets(), CLAUDE_HOOKS, CODEX_HOOKS, ensurePhysicalBase(), ensurePhysicalParent(), fsyncDirectory(), hasMarker() (+24 more)
 
 ### Community 103 - "Verification Result Persistence"
 Cohesion: 0.08
 Nodes (29): RemoteRateLimitFamily, assertDigest(), DEFAULT_REMOTE_RATE_LIMIT_POLICIES, deny(), equalSecret(), evaluateRemoteRequestContext(), InMemoryRemoteRateLimitStateStore, normalizeHost() (+21 more)
 
 ### Community 104 - "Development Session History"
-Cohesion: 0.09
-Nodes (24): ClerkPrincipal, ClerkTokenEnv, ResolvedClerkOrg, resolveOrgForClerk(), verifyClerkToken(), registerHubCors(), assertAgentCapacity(), assertOrgWritable() (+16 more)
+Cohesion: 0.08
+Nodes (35): BriefPreview, ContractCriterion, ContractDraft, ContractValidation, OpenWorkFilters, OpenWorkItem, RequiredArtifact, addError() (+27 more)
 
 ### Community 105 - "Web UI Audit"
-Cohesion: 0.18
-Nodes (18): AgentHomeCodexNativeEventSink, APPROVAL_DECISIONS, APPROVAL_METHODS, CURSOR_SENSITIVE_METHODS, errorText(), isRecord(), itemProjection(), KNOWN_METHODS (+10 more)
+Cohesion: 0.11
+Nodes (25): AgentHomeCodexNativeEventSink, APPROVAL_DECISIONS, APPROVAL_METHODS, CURSOR_SENSITIVE_METHODS, errorText(), isRecord(), itemProjection(), KNOWN_METHODS (+17 more)
 
 ### Community 106 - "Archived Session History"
-Cohesion: 0.05
-Nodes (40): Acceptance, Acceptance, Acceptance, Acceptance, Acceptance, Acceptance, Agent OS, API (+32 more)
+Cohesion: 0.06
+Nodes (35): Acceptance, Agent OS, API, Approvals and policy, Architectural decision, Automated matrix, Codex first-class provider implementation plan, Codex hooks (+27 more)
 
 ### Community 107 - "Similarity Matching"
 Cohesion: 0.07
-Nodes (15): ClaudeConductorPort, ClaudePendingPermission, ClaudeTranscriptLine, NodePtyBackend, PtyBackend, PtyHandle, ControlledPty, ControlledPtyBackend (+7 more)
+Nodes (14): ClaudePendingPermission, ClaudeTranscriptLine, NodePtyBackend, PtyBackend, PtyHandle, ControlledPty, ControlledPtyBackend, DriverBackend (+6 more)
 
 ### Community 108 - "CI and npm Publishing"
 Cohesion: 0.15
 Nodes (30): compactJourneyEvidence(), createStartupCompetitorStartTracker(), navigateFreshInteractionMode(), performanceSampleForJourney(), accessibleNameAudit(), activateMode(), activeFocusProbe(), auditSurface() (+22 more)
 
 ### Community 109 - "Maskable Icon Design"
-Cohesion: 0.08
-Nodes (60): betaQualitySigningPayload(), DEFAULT_BETA_QUALITY_TRUST_ROOTS, exactKeys(), hasSymlinkComponent(), invariant(), regularJsonFile(), SCRIPT_DIRECTORY, sha256() (+52 more)
+Cohesion: 0.14
+Nodes (35): artifactFile(), canonicalSha256(), commitExists(), commitMessage(), discoverStateMachineCandidates(), discoverStateMachineFiles(), evaluateBetaQualityMatrix(), exactKeys() (+27 more)
+
+### Community 110 - "Codex Protocol Checker"
+Cohesion: 0.12
+Nodes (4): DeviceScope, RemoteAuthenticatedDevice, FastifyRequest, FastifySqliteRemoteAdversarialTarget
 
 ### Community 111 - "Application Icon Design"
-Cohesion: 0.14
-Nodes (17): canonicalPayload(), commit(), committedContentHash(), git(), gitEnvironment(), integer(), invalid(), KnowledgeActor (+9 more)
+Cohesion: 0.13
+Nodes (18): canonicalPayload(), commit(), committedContentHash(), git(), gitEnvironment(), id(), integer(), invalid() (+10 more)
 
 ### Community 112 - "Token Diet Script"
-Cohesion: 0.13
-Nodes (16): isWithheldOperationalKey(), normalizeOperationsKey(), OperationsRedactionResult, privacySafePartition(), redactOperationsValue(), safeOperationalEventName(), withholdContent(), boundedInteger() (+8 more)
+Cohesion: 0.09
+Nodes (25): isSafeTokenAccountingValue(), isSensitiveMetadataKey(), normalizeSensitiveKey(), redactStructuredValue(), redactValue(), SAFE_TOKEN_ACCOUNTING_KEYS, StructuredRedactionResult, isWithheldOperationalKey() (+17 more)
 
 ### Community 113 - "Message Feed Tests"
-Cohesion: 0.07
-Nodes (37): CodexProviderRpc, CodexProviderService, CodexProviderServiceOptions, CodexProviderSupervisor, detailForAccount(), readCodexCliVersion(), safeRateLimit(), safeRateLimits() (+29 more)
+Cohesion: 0.10
+Nodes (15): CodexProviderRpc, CodexProviderService, CodexProviderServiceOptions, CodexProviderSupervisor, detailForAccount(), readCodexCliVersion(), safeRateLimit(), safeRateLimits() (+7 more)
 
 ### Community 114 - "Runtime Workspace Tests"
 Cohesion: 0.06
@@ -1004,67 +957,67 @@ Nodes (34): Active session, Actors, Approvals, Assets, Audit attribution, CSRF, 
 
 ### Community 115 - "Durable Provider Kernel"
 Cohesion: 0.16
-Nodes (29): up(), api(), dataDir(), ensureDaemon(), deliver(), ensureSession(), HookProvider, isThrowawayCwd() (+21 more)
+Nodes (29): api(), board(), api(), projectPath(), dataDir(), stopDaemon(), deliver(), ensureSession() (+21 more)
 
 ### Community 116 - "App Icon Style"
-Cohesion: 0.13
-Nodes (38): authDisabled(), baseUrl(), port(), alive(), durableRemoteControlEnabled(), enableNewRemotePairing(), hasBin(), inspectRemoteTunnelHealth() (+30 more)
+Cohesion: 0.16
+Nodes (32): authDisabled(), baseUrl(), port(), alive(), durableRemoteControlEnabled(), enableNewRemotePairing(), hasBin(), inspectRemoteTunnelHealth() (+24 more)
 
 ### Community 117 - "End-to-End Test Script"
 Cohesion: 0.15
 Nodes (31): CompatibilityTelemetrySubject, agent(), agents(), agentsForCardEvents(), canonicalSubjects(), cards(), CompatibilityRead, compatibilityReads() (+23 more)
 
 ### Community 118 - "Review and Server Events"
-Cohesion: 0.13
-Nodes (19): hubEnv, parsePort(), applyMigrations(), dollarQuoteTagAt(), endsWithEscapePrefix(), HUB_MIGRATIONS, hubMigrate(), migrationSql() (+11 more)
+Cohesion: 0.07
+Nodes (29): accessDecision(), ACTIVITY_VOLUME_MARKERS, appealReviewKind(), appealStatus(), boundedInteger(), calibrationKind(), CommandInput, correctiveActionKind() (+21 more)
 
 ### Community 119 - "Archive"
 Cohesion: 0.08
 Nodes (22): HookModule, preserveProcessEnv(), runHookToCompletion(), _internals, runHook(), projectRoot, restoreEnv, databases (+14 more)
 
 ### Community 120 - "Plugin Manifest Tests"
-Cohesion: 0.13
-Nodes (11): CapacityAdmission, CapacityController, CapacityDecision, CapacityPriority, normalizeCapacityRequest(), OperationsRateLimiterOptions, RateLimitDecision, RateLimitFamily (+3 more)
+Cohesion: 0.10
+Nodes (14): CapacityAdmission, CapacityController, CapacityDecision, CapacityPriority, CapacityRequest, normalizeCapacityRequest(), OperationsRateLimiterOptions, RateLimitDecision (+6 more)
 
 ### Community 121 - "PWA Metadata Tests"
 Cohesion: 0.09
-Nodes (28): CapacityControllerOptions, OperationsAlertEngineOptions, OperationsAlertThresholds, OperationsMetricsOptions, boundedDuration(), canonicalTimestamp(), count(), createOperationsRuntime() (+20 more)
+Nodes (27): CapacityControllerOptions, OperationsAlertEngineOptions, OperationsAlertThresholds, OperationsMetricsOptions, boundedDuration(), canonicalTimestamp(), count(), daemonLeaseProbe() (+19 more)
 
 ### Community 122 - "Workspace Cockpit Tests"
 Cohesion: 0.10
-Nodes (20): AgentOsCliDeps, arrayFrom(), attachManagedProcess(), opaqueId(), parseJsonOption(), registerAgentOsCommands(), segment(), terminalStatuses (+12 more)
+Nodes (21): AgentOsApi, AgentOsCliDeps, arrayFrom(), attachManagedProcess(), opaqueId(), parseJsonOption(), registerAgentOsCommands(), segment() (+13 more)
 
 ### Community 123 - "Service Worker Shell"
 Cohesion: 0.10
 Nodes (27): acquireDatabaseRestoreQuiescenceGuard(), acquireStateTransitionGuard(), assertNoDaemonLease(), assertPrivateRegularFile(), canonicalStateRoot(), DaemonQuiescenceReceipt, DatabaseRestoreQuiescenceGuard, invalidateDaemonQuiescenceReceipt() (+19 more)
 
 ### Community 124 - "Recent Work Note"
-Cohesion: 0.09
+Cohesion: 0.08
 Nodes (18): boundedTimeout(), finiteLatency(), OPERATIONS_HEALTH_COMPONENTS, OperationsHealthComponent, OperationsHealthComponentResult, OperationsHealthProbe, OperationsHealthProbeResult, OperationsHealthService (+10 more)
 
 ### Community 125 - "Push Service Worker"
 Cohesion: 0.07
-Nodes (30): REMOTE_RESOURCE_TYPES, REMOTE_SCOPES, RemoteAuthorizationDenialCode, RemoteMutationAuditEnvelope, RemoteMutationDenialAuditEnvelope, RemoteResourceType, assertBaseEnvelope(), assertExactAuditTriggers() (+22 more)
+Nodes (28): REMOTE_RESOURCE_TYPES, REMOTE_SCOPES, RemoteAuthorizationDenialCode, RemoteMutationAuditEnvelope, RemoteMutationDenialAuditEnvelope, RemoteResourceType, assertBaseEnvelope(), assertExactAuditTriggers() (+20 more)
 
 ### Community 126 - "Current Work Note"
-Cohesion: 0.12
-Nodes (20): CatalogSmokeDeps, CatalogSmokeResult, evaluateCatalogSmoke(), compareExecutableSemver(), ExecutableSemver, parseExecutableSemver(), pickNewestExecutable(), CachedLatest (+12 more)
+Cohesion: 0.20
+Nodes (4): authorizationFromRequest(), providerSessionIdForCleanup(), safeOpaqueIdentifier(), ValidatedProviderExecutionAdapter
 
 ### Community 127 - "Package Binary Fix"
-Cohesion: 0.07
-Nodes (36): DaemonDownOverlay(), localFallback, OfflineStateBanner(), RemoteAccessContext, RemoteAccessProvider(), RemoteAccessState, asRecord(), defaultPreferences (+28 more)
+Cohesion: 0.11
+Nodes (26): DEFAULT_REMOTE_POLICY_RULES, allowedDeepLinkKeys, asObject(), asString(), hasMatchingStepUp(), hasRemoteScope(), matchesDeviceRevokeGrant(), normalizedScopes() (+18 more)
 
 ### Community 128 - "QR Code Types"
 Cohesion: 0.09
 Nodes (21): activeDaemons, api(), boardJob(), conversationEvents(), DaemonHandle, daemonNodeDirectory, fakeCodexFixture, Json (+13 more)
 
 ### Community 129 - "Similarity Detection"
-Cohesion: 0.09
-Nodes (29): CompatibilityForwardPlanEntry, QuarantineInput, StoredLink, CompatibilityMigrationFailureReservationInput, assertSuccessObservations(), CompatibilityMigrationOperationInput, CompatibilityMigrationSuccessObservation, compatibilitySourceKey() (+21 more)
+Cohesion: 0.14
+Nodes (19): CompatibilityMigrationFailureReservationInput, assertSuccessObservations(), CompatibilityMigrationOperationInput, CompatibilityMigrationSuccessObservation, compatibilitySourceKey(), diagnosticForFailure(), FAILURE_JOURNALS, NormalSuccessOperation (+11 more)
 
 ### Community 130 - "NDC Utility"
-Cohesion: 0.09
-Nodes (7): DeliveryTrackbookService, integer(), mapAutoshipCompletion(), mapShipment(), mapShipmentReceipt(), mapVerificationRun(), positiveInteger()
+Cohesion: 0.11
+Nodes (5): DeliveryTrackbookService, integer(), mapAutoshipCompletion(), mapAutoshipIntent(), positiveInteger()
 
 ### Community 131 - "Package Build Config"
 Cohesion: 0.09
@@ -1079,7 +1032,7 @@ Cohesion: 0.10
 Nodes (24): BuildOverrides, completeBuild(), contentHash, digest(), EntryOverrides, fullTargets(), insertBuild(), insertBuildSource() (+16 more)
 
 ### Community 134 - "Community 134"
-Cohesion: 0.16
+Cohesion: 0.17
 Nodes (27): AgentHomeClaudeNativeEventSinkOptions, assistantProjections(), CanonicalEventStorage, ClaudeRawArtifactMode, finiteNumber(), isRecord(), nativeCursor(), nativeEventId() (+19 more)
 
 ### Community 135 - "Community 135"
@@ -1088,7 +1041,7 @@ Nodes (19): evaluateKnowledgeBenchmark(), fail(), KnowledgeBenchmarkGate, Knowle
 
 ### Community 136 - "Community 136"
 Cohesion: 0.07
-Nodes (28): Agent OS Job Market / Open Work candidate, Backlog disposition, Bottom line, Candidate commits, Central integration required, Changed files, External gates deliberately left open, Next dependency-ready task (+20 more)
+Nodes (27): Agent OS Job Market / Open Work candidate, Backlog disposition, Bottom line, Candidate commits, Central integration required, Changed files, External gates deliberately left open, Next dependency-ready task (+19 more)
 
 ### Community 137 - "Community 137"
 Cohesion: 0.07
@@ -1100,11 +1053,11 @@ Nodes (11): WorkspaceEvent, WorkspaceRecord, ArchiveWorkspaceOptions, CreateWork
 
 ### Community 139 - "Community 139"
 Cohesion: 0.13
-Nodes (11): defaultRunTests(), RegisteredWorktree, run, ShipCandidate, shipGate(), ShipQueue, Ev, git() (+3 more)
+Nodes (12): autoshipEnabled(), defaultRunTests(), RegisteredWorktree, run, ShipCandidate, shipGate(), ShipQueue, Ev (+4 more)
 
 ### Community 140 - "Community 140"
-Cohesion: 0.10
-Nodes (18): KnowledgeAction, knowledgeApi, KnowledgeCitation, KnowledgeFreshness, KnowledgeGraphifySync, KnowledgeItem, KnowledgeManifestEntry, KnowledgePromotion (+10 more)
+Cohesion: 0.12
+Nodes (23): assertOperationsShutdownClean(), createOperationsRuntime(), bindCodexAgentHomeForThread(), CODEX_ENV_ALLOWLIST, codexAgentHomeForThread(), CodexProviderContractRouting, codexTokenBudgetForThread(), codexWorkspaceForThread() (+15 more)
 
 ### Community 141 - "Community 141"
 Cohesion: 0.11
@@ -1119,28 +1072,28 @@ Cohesion: 0.15
 Nodes (23): canonicalize(), contractPath, digest(), exactKeys(), exactWorkflowIdentity(), invariant(), readJson(), regularFileBytes() (+15 more)
 
 ### Community 144 - "Community 144"
-Cohesion: 0.09
-Nodes (20): isAgentHomeRuntimeControl(), registerAgentOsRoutes(), AgentOsServerCompositionHost, AgentOsServerCompositionInput, composeAgentOsRouteOptions(), configuredGlobalCapacity(), configuredPerProfileCapacity(), registerAgentOsServerComposition() (+12 more)
+Cohesion: 0.10
+Nodes (19): isAgentHomeRuntimeControl(), registerAgentOsRoutes(), AgentOsServerCompositionHost, AgentOsServerCompositionInput, AgentOsServerRouteOptions, composeAgentOsRouteOptions(), configuredGlobalCapacity(), configuredPerProfileCapacity() (+11 more)
 
 ### Community 145 - "Community 145"
 Cohesion: 0.08
 Nodes (25): API and durability, Delivery Report Kernel Record, Operator and Agent Credential Boundary, Terminal Parity Invariant, Attention, policy, and context, Checkpoints and scheduled jobs, Delivery Trackbook, Open the cockpit (+17 more)
 
 ### Community 146 - "Community 146"
-Cohesion: 0.07
-Nodes (33): Agent OS Canonical Domain, AgentProfile, AgentSession, AgentSession, AttentionItem, Canonical nouns, Causal metadata, Conflict (+25 more)
+Cohesion: 0.09
+Nodes (26): Agent OS Canonical Domain, AgentProfile, AgentSession, AttentionItem, Canonical nouns, Causal metadata, Conflict, Delivery (+18 more)
 
 ### Community 147 - "Community 147"
 Cohesion: 0.16
 Nodes (25): applyFirstRunAmbientHooks(), ApplyFirstRunAmbientHooksDeps, applyFirstRunPlan(), ApplyFirstRunPlanDeps, assertFirstRunConfigCompatible(), buildFirstRunPlan(), CONFIG_KEYS, exactKeys() (+17 more)
 
 ### Community 148 - "Community 148"
-Cohesion: 0.12
-Nodes (22): PRODUCTION_AC_EVIDENCE_MANIFEST, AdversarialCase, AdversarialCaseResult, assertAdversarialContractPassed(), denied(), hasNoSecret(), issueDevice(), lifecycleEvidenceByTransition (+14 more)
+Cohesion: 0.13
+Nodes (21): AdversarialCase, AdversarialCaseResult, assertAdversarialContractPassed(), denied(), hasNoSecret(), issueDevice(), lifecycleEvidenceByTransition, ok() (+13 more)
 
 ### Community 149 - "Community 149"
 Cohesion: 0.17
-Nodes (6): CodexAgentHomeThreadBinder, optionalPositiveInteger(), optionalString(), requiredString(), samePath(), safeLookup()
+Nodes (6): captureRecovery(), CodexAgentHomeThreadBinder, optionalPositiveInteger(), optionalString(), requiredString(), samePath()
 
 ### Community 150 - "Community 150"
 Cohesion: 0.12
@@ -1148,19 +1101,23 @@ Nodes (21): assertDeliveryAutoshipIntentSchema(), installDeliveryAutoshipIntentS
 
 ### Community 151 - "Community 151"
 Cohesion: 0.10
-Nodes (12): KnowledgeRetrievalContractError, KnowledgeRetrievalError, addContract(), BASE_COMMIT, chunkFixture(), databases, OTHER_COMMIT, request() (+4 more)
+Nodes (14): KnowledgeRetrievalContractError, installKnowledgeRetrievalSchema(), KnowledgeRetrievalError, addContract(), BASE_COMMIT, chunkFixture(), database(), databases (+6 more)
 
 ### Community 152 - "Community 152"
-Cohesion: 0.09
-Nodes (23): properties, $ref, const, type, minLength, type, base_ref, direction (+15 more)
+Cohesion: 0.08
+Nodes (26): properties, $ref, const, type, minLength, type, base_ref, direction (+18 more)
 
 ### Community 153 - "Community 153"
-Cohesion: 0.16
-Nodes (20): arm(), report, tok(), TURNS, cardLine(), questionLine(), renderSessionStart(), compactRules() (+12 more)
+Cohesion: 0.15
+Nodes (20): arm(), report, tok(), TURNS, auditorRules(), strategistRules(), verifierRules(), cardLine() (+12 more)
 
 ### Community 154 - "Community 154"
 Cohesion: 0.12
 Nodes (20): attestRemoteDeviceProofSchema(), base64url(), boundedText(), expectedProofSchema(), installRemoteDeviceProofSchema(), normalizeHtu(), normalizeSchemaSql(), parsePart() (+12 more)
+
+### Community 155 - "Community 155"
+Cohesion: 0.16
+Nodes (25): acceptedDecisionKnowledgePlans(), boardTargets(), changedLineRangesAtCommit(), changedSelectedPaths(), commitMetadata(), credentialComponent(), deliveryPlans(), deliveryTargets() (+17 more)
 
 ### Community 156 - "Community 156"
 Cohesion: 0.10
@@ -1168,87 +1125,87 @@ Nodes (22): AGENT_OS_LEGACY_TERMINAL_SESSION_STATE_MIGRATION_ID, assertCausalEve
 
 ### Community 157 - "Community 157"
 Cohesion: 0.15
-Nodes (13): assertStructurallyValid(), contractBlockers(), criticalPaths(), mapCriteria(), mapDependencies(), mapTaskContract(), mapVerifier(), nullablePositiveInteger() (+5 more)
+Nodes (8): assertStructurallyValid(), configuredGlobalCapacity(), contractBlockers(), criticalPaths(), normalizedAccess(), normalizedNullableText(), OpenWorkService, requiredAccess()
 
 ### Community 158 - "Community 158"
-Cohesion: 0.08
-Nodes (20): DriverDescriptor, DriverRegistry, AsyncQueue, createRuntimeLayer(), RuntimeLayer, RuntimeState, RuntimeSupervisorOptions, signalNames (+12 more)
+Cohesion: 0.10
+Nodes (13): DriverDescriptor, DriverRegistry, createRuntimeLayer(), RuntimeLayer, RuntimeSupervisorOptions, supervisors, until(), waitForOutput() (+5 more)
 
 ### Community 159 - "Community 159"
 Cohesion: 0.08
-Nodes (24): Agent OS TOOL-013 WIP Restart Checkpoint — 2026-07-26, Asked, Current verified evidence, Delivered in this partial TOOL-013 batch, Exact resume procedure, Independent review findings that keep TOOL-013 open, Paste-ready resume prompt, Remaining critical design gap (+16 more)
+Nodes (23): Agent OS TOOL-013 WIP Restart Checkpoint — 2026-07-26, Asked, Current verified evidence, Delivered in this partial TOOL-013 batch, Exact resume procedure, Independent review findings that keep TOOL-013 open, Paste-ready resume prompt, Remaining critical design gap (+15 more)
 
 ### Community 160 - "Community 160"
-Cohesion: 0.09
-Nodes (32): CompiledContextDocumentKind, CompiledSectionUsage, ERROR_MESSAGES, exactKeys(), fail(), integer(), KNOWLEDGE_COMPILER_CONTRACT_VERSION, knowledgeCompilationRequestHash() (+24 more)
+Cohesion: 0.20
+Nodes (22): CompiledContextDocumentKind, CompiledSectionUsage, ERROR_MESSAGES, exactKeys(), fail(), integer(), knowledgeCompilationRequestHash(), KnowledgeCompilerContractError (+14 more)
 
 ### Community 161 - "Community 161"
-Cohesion: 0.13
-Nodes (29): blockedLoginCheck(), claudeLoginCheck(), codexLoginCheck(), compareSemver(), compatibilityRemediation(), DoctorRemediation, executableCandidates(), executableIdentity() (+21 more)
+Cohesion: 0.14
+Nodes (24): callablePropertyDeclarationAt(), closingBrace(), commonJsImportContains(), ecmaScriptImportContains(), groupingDepthBefore(), importedBindingAt(), logicalStatementNeedsNextLine(), matchingParenthesis() (+16 more)
 
 ### Community 162 - "Community 162"
 Cohesion: 0.17
 Nodes (23): canonicalJson(), checkedBudget(), deriveRegressionBudgetMs(), evidenceDigest(), finalizeBrowserEvidence(), percentile(), PERFORMANCE_SURFACES, redactEvidence() (+15 more)
 
 ### Community 163 - "Community 163"
-Cohesion: 0.07
-Nodes (27): minLength, type, const, const, minLength, type, minLength, type (+19 more)
+Cohesion: 0.08
+Nodes (24): const, const, minLength, type, minLength, type, properties, $ref (+16 more)
 
 ### Community 164 - "Community 164"
-Cohesion: 0.05
-Nodes (45): CLAUDE_PROVIDER_CONFIGURATION_FINGERPRINT_V1, CLAUDE_PROVIDER_LIFECYCLE_EVIDENCE_V1, ClaudeProviderAdapterOptionsV1, ClaudeProviderDriverPortV1, createClaudeProviderAdapterV1(), defineProviderLaunchBoundaryV1(), defineProviderNoCostConsentV1(), ProviderActionV1 (+37 more)
+Cohesion: 0.11
+Nodes (13): ProviderContractError, ProviderCostConsentV1, ProviderExecutionAdapterImplementationV1, assignedSessionOutput(), authorizeAction(), intent(), launchAction(), launchFixture() (+5 more)
 
 ### Community 165 - "Community 165"
-Cohesion: 0.11
-Nodes (15): appendIn(), boundedInteger(), DiscussionService, markdown(), member(), normalizedTags(), optionalIso(), optionalMarkdown() (+7 more)
+Cohesion: 0.26
+Nodes (6): markdown(), member(), optionalMarkdown(), sameActor(), sha256(), text()
 
 ### Community 166 - "Community 166"
 Cohesion: 0.15
 Nodes (19): APPROVAL_KINDS, APPROVAL_METHOD_KINDS, approvalKindFor(), boundedRedacted(), ManagedDriverEventClassification, ManagedDriverEventProjection, methodsFor(), projectManagedDriverEvent() (+11 more)
 
 ### Community 167 - "Community 167"
-Cohesion: 0.11
-Nodes (13): ClaudeAgentDriverAdapter, ClaudeAgentDriverOptions, ClaudeAgentHomeBinding, ClaudeAgentRecord, ClaudeNativeEventKind, ClaudeNativeSessionFork, ClaudeSessionForkOptions, ClaudeSessionForkResult (+5 more)
+Cohesion: 0.14
+Nodes (20): accessArray(), integerArray(), mapArtifacts(), mapCriteria(), mapDependencies(), mapTaskContract(), mapVerifier(), nullableNonNegativeInteger() (+12 more)
 
 ### Community 168 - "Community 168"
 Cohesion: 0.12
-Nodes (14): BudgetEnforcement, BudgetRow, budgetScope(), BudgetScopeKind, CachedInputSemantics, cachedSemantics(), ClaudeNativeReadObservationInput, DashboardWindow (+6 more)
+Nodes (20): ActivityObservationInput, BenchmarkObservationInput, BudgetPolicyInput, BudgetRow, BudgetScopeKind, CachedInputSemantics, ClaudeNativeReadObservationInput, DashboardWindow (+12 more)
 
 ### Community 169 - "Community 169"
-Cohesion: 0.16
-Nodes (27): a(), addPropertyDecorator(), bezFunction(), createCanvas(), createTag(), d(), e(), extendPrototype() (+19 more)
+Cohesion: 0.10
+Nodes (18): createDispatchIdempotencyKey(), defaultOpenWorkFilters(), dispatchInputFromMatch(), openWorkApi, OpenWorkMatch, OpenWorkProtocolError, queryInteger(), serializeOpenWorkFilters() (+10 more)
 
 ### Community 170 - "Community 170"
 Cohesion: 0.23
 Nodes (20): assertRepositoryExecutionTarget(), assertSafeChildPath(), createDatabaseBackup(), DatabaseBackupManifest, digest(), executeFile, fileSha256(), inspectDatabase() (+12 more)
 
 ### Community 171 - "Community 171"
-Cohesion: 0.36
-Nodes (6): conductorSetup(), git(), mkRepo(), reviewCard(), run, serverSetup()
+Cohesion: 0.10
+Nodes (16): outcomeAnalyticsPlugin(), conductorSetup(), git(), mkRepo(), reviewCard(), run, serverSetup(), databases (+8 more)
 
 ### Community 172 - "Community 172"
 Cohesion: 0.14
 Nodes (13): HistoryRow, mapHistory(), mapState(), ProcessRow, RecordTerminalCommand, requiredId(), StateRow, TerminalCommandHistoryRecord (+5 more)
 
 ### Community 173 - "Community 173"
-Cohesion: 0.16
-Nodes (16): MessageKind, Props, MessagePresentation, MessagePresentationContext, MessagePresentationToken, MessagePresentationTokenKind, MessagePresentationTone, PresentableMessage (+8 more)
+Cohesion: 0.14
+Nodes (18): BoardMessage, MessageKind, MessageBody(), Props, MessagePresentation, MessagePresentationContext, MessagePresentationToken, MessagePresentationTokenKind (+10 more)
 
 ### Community 174 - "Community 174"
-Cohesion: 0.10
-Nodes (9): notifyProcessOutput(), signal, waitForProcessOutput(), mapProcess(), SqliteRuntimePersistence, NewProcessRecord, ProcessPatch, ProcessRestartRecipe (+1 more)
+Cohesion: 0.14
+Nodes (10): BoardRef, OrganizationClient, Props, organizationAttention, organizationCounts(), organizationList(), organizationText(), JsonObject (+2 more)
 
 ### Community 175 - "Community 175"
 Cohesion: 0.09
 Nodes (17): AbuseCase, Classification, classifications, CurrentControl, CurrentStatus, Evidence, Impact, inventory (+9 more)
 
 ### Community 176 - "Community 176"
-Cohesion: 0.20
-Nodes (15): AGENT_OS_DEVICE_SESSION_MIGRATION_ID, AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID, assertDeviceSessionSchema(), assertExistingDeviceSessionSchemaCompatible(), DEVICE_SESSION_INDEXES, DEVICE_SESSION_SCHEMA_VERSION, DEVICE_SESSION_TABLES, DEVICE_SESSION_TRIGGERS (+7 more)
+Cohesion: 0.18
+Nodes (17): AGENT_OS_DEVICE_SESSION_MIGRATION_ID, AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID, assertDeviceSessionSchema(), assertExistingDeviceSessionSchemaCompatible(), DEVICE_SESSION_INDEXES, DEVICE_SESSION_SCHEMA_VERSION, DEVICE_SESSION_TABLES, DEVICE_SESSION_TRIGGERS (+9 more)
 
 ### Community 177 - "Community 177"
-Cohesion: 0.12
-Nodes (12): FailedOp, isFailedOp(), isQueuedOp(), isStoredOutbox(), jsonClone(), Outbox, OutboxCorruptError, OutboxFullError (+4 more)
+Cohesion: 0.14
+Nodes (3): DiscussionService, postTree(), safeRelativePath()
 
 ### Community 178 - "Community 178"
 Cohesion: 0.11
@@ -1259,16 +1216,12 @@ Cohesion: 0.10
 Nodes (21): oneOf, $ref, properties, integration_manifest, integration_schema_sha256, qa018_closure_supported, qa018_signature_receipt, requirements_sha256 (+13 more)
 
 ### Community 180 - "Community 180"
-Cohesion: 0.09
-Nodes (23): createGraphifyAutoSync(), Autowake, autowakeEnabled(), AutowakeOptions, WakeFn, serve(), survivors(), claudeUsage (+15 more)
-
-### Community 181 - "Community 181"
 Cohesion: 0.14
-Nodes (12): HubBroadcaster, HeartbeatInput, FastifyInstance, HubAgent, HubAgentState, HubCard, HubEvent, HubOpsRouteOptions (+4 more)
+Nodes (15): AutowakeOptions, WakeFn, claudeUsage, hardware(), _internals, loadLastUsage(), _resetUsageState(), saveLastUsage() (+7 more)
 
 ### Community 182 - "Community 182"
 Cohesion: 0.10
-Nodes (19): Beta artifact, upgrade, rollback, and hotfix operations, Beta channel and staged flags, Current integrated gate state, Evidence still requiring external systems, Hotfix, Local retained-artifact rehearsal, QA-018 signed integration evidence, Release boundary (+11 more)
+Nodes (18): Beta artifact, upgrade, rollback, and hotfix operations, Beta channel and staged flags, Current integrated gate state, Evidence still requiring external systems, Hotfix, Local retained-artifact rehearsal, QA-018 signed integration evidence, Release boundary (+10 more)
 
 ### Community 183 - "Community 183"
 Cohesion: 0.14
@@ -1279,36 +1232,36 @@ Cohesion: 0.15
 Nodes (20): Catch-Up Delivery #61, Current Shipping Status, Dead-Letter Bounce #47, Per-Agent Token Usage Split #56, Agentic OS Milestone 1, Multi-Session Collision Avoidance, Token-Diet Milestone 2, Web UI Audit (+12 more)
 
 ### Community 185 - "Community 185"
-Cohesion: 0.11
-Nodes (18): CreateProjectInput, ensureDefaultProject(), HubBoardListing, HubBoardRow, HubProject, insertBoard(), insertProject(), listBoards() (+10 more)
+Cohesion: 0.10
+Nodes (19): 01:37–01:41 | main, 11:31 | main, 11:34 | main, 11:42 | main, 11:43 | main, 11:52 | main, 12:09 | main, 12:17 | main (+11 more)
 
 ### Community 186 - "Community 186"
-Cohesion: 0.16
-Nodes (16): ExternalTranscriptLine, ExternalTranscriptService, loadQwenSessionTranscript(), loadSdkSessionTranscript(), parseQwenTranscriptEntry(), parseTranscriptEntry(), readTranscriptTail(), resultSummary() (+8 more)
+Cohesion: 0.13
+Nodes (13): Dashboard, formatCount(), formatDuration(), formatRate(), integer, OutcomeDashboard(), percent, createSingleFlightRefresh() (+5 more)
 
 ### Community 187 - "Community 187"
-Cohesion: 0.13
-Nodes (12): AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_SCHEMA_OBJECT_NAMES, applyCompatibilityMigrationFailureJournalMigration(), CompatibilityMigrationFailureJournalCapacityError, CompatibilityMigrationTelemetryEvidenceIncompleteError, tableExists(), databases, dropOwnedSchema(), journals (+4 more)
+Cohesion: 0.12
+Nodes (13): AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_SCHEMA_OBJECT_NAMES, applyCompatibilityMigrationFailureJournalMigration(), CompatibilityMigrationFailureJournalCapacityError, CompatibilityMigrationTelemetryEvidenceIncompleteError, tableExists(), databases, dropOwnedSchema(), journals (+5 more)
 
 ### Community 188 - "Community 188"
-Cohesion: 0.11
-Nodes (15): bindCompatibilityMigrationFailureJournal(), queryCompatibilityMigrationTelemetrySummary(), runReadSnapshot(), LegacyEventProjection, numberOrNull(), agentUsageTelemetry(), bindJournal(), cardEventTelemetry() (+7 more)
+Cohesion: 0.12
+Nodes (15): bindCompatibilityMigrationFailureJournal(), queryCompatibilityMigrationTelemetrySummary(), runReadSnapshot(), agentUsageTelemetry(), bindJournal(), cardEventTelemetry(), databases, Fixture (+7 more)
 
 ### Community 189 - "Community 189"
-Cohesion: 0.21
-Nodes (6): concise(), DeliveryLifecycleIntegration, DeliveryReport, JobDeliveryDetail, VerifiedDeliverySummaryHistoryInput, VerifiedDeliverySummaryInput
+Cohesion: 0.22
+Nodes (5): concise(), DeliveryLifecycleIntegration, DeliveryReport, JobDeliveryDetail, VerifiedDeliverySummaryHistoryInput
 
 ### Community 190 - "Community 190"
-Cohesion: 0.13
-Nodes (12): actorId(), idempotencyKey(), optionalText(), sessionToolPlugin(), SessionToolRouteOptions, text(), SessionToolPolicyRule, ToolInvocationProvenance (+4 more)
+Cohesion: 0.18
+Nodes (9): EvidenceReference, boundHuman(), characterCount(), ItemBudget, sliceCharacters(), stripControls(), summarizeEvidence(), summarizeResult() (+1 more)
 
 ### Community 191 - "Community 191"
-Cohesion: 0.14
-Nodes (18): Agent OS KNO-001 Exact-Head Checkpoint — 2026-07-26, Asked, Asked versus Delivered, Delivered, Evidence, Exact commits, Non-goals, Remaining (+10 more)
+Cohesion: 0.11
+Nodes (17): Agent OS KNO-001 Exact-Head Checkpoint — 2026-07-26, Asked, Asked versus Delivered, Delivered, Evidence, Exact commits, Non-goals, Remaining (+9 more)
 
 ### Community 192 - "Community 192"
-Cohesion: 0.06
-Nodes (52): 1. Hire an agent, 2. Launch a card, 3. Ask an agent, 4. Run a terminal command, 5. Review a delivery, 6. Resolve a conflict, 7. Control from a phone, Agent OS primary journeys (+44 more)
+Cohesion: 0.30
+Nodes (18): 1. Hire an agent, 2. Launch a card, 3. Ask an agent, 4. Run a terminal command, 5. Review a delivery, 6. Resolve a conflict, 7. Control from a phone, Agent OS primary journeys (+10 more)
 
 ### Community 193 - "Community 193"
 Cohesion: 0.12
@@ -1323,12 +1276,12 @@ Cohesion: 0.21
 Nodes (19): CLI and Hook Runner, Implementation Plan, Overlap Detection, Pulse Message Delivery, REST API and Event Bus, Single Daemon Architecture, SQLite Data Layer, SSE Daemon Lifecycle (+11 more)
 
 ### Community 196 - "Community 196"
-Cohesion: 0.13
-Nodes (14): pattern, type, $defs, commit, range, sha256, slice, oneOf (+6 more)
+Cohesion: 0.11
+Nodes (18): pattern, type, $defs, commit, detectRequest, range, sha256, slice (+10 more)
 
 ### Community 197 - "Community 197"
-Cohesion: 0.20
-Nodes (10): impactRequest, additionalProperties, properties, required, type, enum, observed_risk, request_id (+2 more)
+Cohesion: 0.12
+Nodes (19): const, additionalProperties, required, type, impactRequest, properties, additionalProperties, properties (+11 more)
 
 ### Community 198 - "Community 198"
 Cohesion: 0.22
@@ -1347,8 +1300,8 @@ Cohesion: 0.16
 Nodes (13): AGENT_OS_LEGACY_AUTHORITY_MODES, AGENT_OS_LEGACY_COMPATIBILITY_TABLES, AGENT_OS_LEGACY_PROJECTION_CONTRACT, AGENT_OS_LEGACY_TARGET_DISPOSITIONS, AgentOsLegacyAuthorityMode, AgentOsLegacyProjectionContract, AgentOsLegacyTableProjection, AgentOsLegacyTargetDisposition (+5 more)
 
 ### Community 202 - "Community 202"
-Cohesion: 0.13
-Nodes (13): DaemonHubClient, DaemonOrgSyncLoop, entityId(), entityIdOrNull(), HubBoardResolver, LocalHubOp, LocalSyncAgent, MirrorState (+5 more)
+Cohesion: 0.22
+Nodes (16): assertAutoshipCandidateCleaned(), captureAutoshipWorktreeIdentity(), durableWorktreeIdentity(), exactBoardRepository(), fullCommit(), gitBranch(), gitEvidence(), localBranchCommit() (+8 more)
 
 ### Community 203 - "Community 203"
 Cohesion: 0.11
@@ -1363,20 +1316,20 @@ Cohesion: 0.20
 Nodes (12): canonical(), evaluateBenchmarkPair(), exactHead(), identifier(), integer(), OUTCOME_KEYS, runOutcomeBenchmark(), runVariant() (+4 more)
 
 ### Community 206 - "Community 206"
-Cohesion: 0.17
-Nodes (12): passwordReset(), passwordStatus(), defaultHome(), digestPassword(), digestSession(), FailureWindow, LocalOwnerPasswordAuth, localOwnerPasswordPath() (+4 more)
+Cohesion: 0.20
+Nodes (10): defaultHome(), digestPassword(), digestSession(), FailureWindow, LocalOwnerPasswordAuth, localOwnerPasswordPath(), PasswordRecord, resetLocalOwnerPassword() (+2 more)
 
 ### Community 207 - "Community 207"
-Cohesion: 0.10
-Nodes (20): dependencies, @clerk/react, react, react-dom, @xterm/addon-fit, @xterm/xterm, devDependencies, @types/react (+12 more)
+Cohesion: 0.11
+Nodes (17): dependencies, react, react-dom, @xterm/addon-fit, @xterm/xterm, devDependencies, @types/react, @types/react-dom (+9 more)
 
 ### Community 208 - "Community 208"
-Cohesion: 0.21
-Nodes (14): actorIdentity(), actorKey(), assertSafeRetainedArtifact(), assertSafeVerificationOutput(), bounded(), canonicalJson(), hashJson(), identifier() (+6 more)
+Cohesion: 0.33
+Nodes (8): actorIdentity(), actorKey(), bounded(), hashJson(), identifier(), iso(), optionalIdentifier(), sha256()
 
 ### Community 209 - "Community 209"
-Cohesion: 0.10
-Nodes (22): Agent OS surface inventory, Agent OS Surface Manifest, Classification, CLI API, CLI API Surface, Compatibility forward migration, Contract Surface Counts, Database Surface (+14 more)
+Cohesion: 0.13
+Nodes (17): Agent OS Surface Inventory, CLI API Surface, Compatibility Migration Manifest, Contract Surface Counts, Database Surface, Event Vocabulary Manifest, Events and Projections, Focused Service Boundaries (+9 more)
 
 ### Community 210 - "Community 210"
 Cohesion: 0.17
@@ -1388,7 +1341,7 @@ Nodes (9): claudeNativePayloads, actor, append(), createScope(), databases, nati
 
 ### Community 212 - "Community 212"
 Cohesion: 0.12
-Nodes (16): items, maxItems, type, uniqueItems, $ref, accepted_remediation_checkpoints, risk_dispositions, slices (+8 more)
+Nodes (17): items, maxItems, type, uniqueItems, $ref, accepted_remediation_checkpoints, raw_artifacts, slices (+9 more)
 
 ### Community 213 - "Community 213"
 Cohesion: 0.17
@@ -1411,44 +1364,44 @@ Cohesion: 0.17
 Nodes (12): freshState(), input, loadState(), notify(), recordCall(), respond(), saveState(), state (+4 more)
 
 ### Community 219 - "Community 219"
-Cohesion: 0.11
-Nodes (18): scripts, accept:codex, baseline:agent-os, benchmark:outcomes, beta:monitor, build, check:codex-app-server, check:codex-protocol (+10 more)
+Cohesion: 0.12
+Nodes (16): scripts, accept:codex, baseline:agent-os, benchmark:outcomes, beta:monitor, build, check:codex-app-server, check:codex-protocol (+8 more)
 
 ### Community 220 - "Community 220"
 Cohesion: 0.12
 Nodes (15): additionalProperties, pattern, type, $defs, commit, disposition, sha256, additionalProperties (+7 more)
 
 ### Community 221 - "Community 221"
-Cohesion: 0.06
-Nodes (32): board(), card, envAgent(), inferAgent(), memoryRoot(), ops, password, passwordConfigured() (+24 more)
+Cohesion: 0.14
+Nodes (10): card, envAgent(), inferAgent(), ops, password, program, resolveOperationsStateDirectory(), up() (+2 more)
 
 ### Community 222 - "Community 222"
-Cohesion: 0.11
-Nodes (20): home(), legacyVapidPath(), loadSecureVapidKeys(), NOTIFY_COLUMNS, persistVapidReference(), port(), publicBase(), PushOptions (+12 more)
+Cohesion: 0.26
+Nodes (15): home(), legacyVapidPath(), loadSecureVapidKeys(), NOTIFY_COLUMNS, persistVapidReference(), port(), publicBase(), PushOptions (+7 more)
 
 ### Community 223 - "Community 223"
 Cohesion: 0.17
 Nodes (11): allowedScopes, DeviceRecord, owner, RemoteAdversarialAction, RemoteAdversarialObservation, TestKey, canonicalValue(), remoteRequestDigest() (+3 more)
 
 ### Community 224 - "Community 224"
-Cohesion: 0.14
-Nodes (12): KnowledgeSourceIngestionError, AdvancedStructuralCase, baseInput(), boardDb(), commit(), databases, git(), RAW_SECRET (+4 more)
+Cohesion: 0.17
+Nodes (11): AdvancedStructuralCase, baseInput(), boardDb(), commit(), databases, git(), RAW_SECRET, repositories (+3 more)
 
 ### Community 225 - "Community 225"
-Cohesion: 0.14
-Nodes (10): budget(), criterionRow(), renderAgentBrief(), RenderAgentBriefInput, RenderedAgentBrief, verifier(), ContractValidation, JobMarketContract (+2 more)
+Cohesion: 0.16
+Nodes (11): AgentBriefSelection, budget(), criterionRow(), renderAgentBrief(), RenderedAgentBrief, verifier(), TaskContractTemplateContract, ContractAccessNeed (+3 more)
 
 ### Community 226 - "Community 226"
-Cohesion: 0.26
-Nodes (6): AgentProfile, AgentHomeSnapshot, completeAssignmentIdentity(), ManagedAgentSessionBinder, normalizeAssignmentIdentity(), sameAssignmentIdentity()
+Cohesion: 0.25
+Nodes (7): AgentProfile, AgentConversation, AgentHomeSnapshot, completeAssignmentIdentity(), ManagedAgentSessionBinder, normalizeAssignmentIdentity(), sameAssignmentIdentity()
 
 ### Community 227 - "Community 227"
-Cohesion: 0.13
-Nodes (12): DEFAULT_PHONE_DEVICE_SCOPES, PairingRedemption, fixture(), owner, phoneJwk, phoneKeys, phoneThumbprint, signature() (+4 more)
+Cohesion: 0.14
+Nodes (11): DEFAULT_PHONE_DEVICE_SCOPES, PairingRedemption, owner, phoneJwk, phoneKeys, phoneThumbprint, signature(), tabletJwk (+3 more)
 
 ### Community 228 - "Community 228"
-Cohesion: 0.15
-Nodes (8): asError(), conflictGuidance(), isAbortError(), positive(), safeErrorMessage(), SyncClient, SyncLoop, SyncState
+Cohesion: 0.27
+Nodes (15): assertSyntacticRelationship(), ecmaScriptLanguage(), javaImportContains(), javaLanguage(), javaModuleTargets(), javaPackageComponents(), javaQualifiedReferenceContains(), javaTargetClassPartIndex() (+7 more)
 
 ### Community 229 - "Community 229"
 Cohesion: 0.18
@@ -1467,16 +1420,16 @@ Cohesion: 0.13
 Nodes (14): Agent OS North Star Delivery Program, Asked, Delivered, Evidence, Evidence baseline, Handoff contract, Historical pre-beta delivery slice (superseded), Milestone A — Coherent kernel (+6 more)
 
 ### Community 233 - "Community 233"
-Cohesion: 0.11
-Nodes (17): bin, orchestra, bugs, url, description, engines, node, npm (+9 more)
+Cohesion: 0.13
+Nodes (14): bin, orchestra, bugs, url, description, files, homepage, keywords (+6 more)
 
 ### Community 234 - "Community 234"
-Cohesion: 0.15
-Nodes (13): $ref, slice, accepted_commit, slice_id, source_checkpoint, unresolved_findings, additionalProperties, enum (+5 more)
+Cohesion: 0.13
+Nodes (15): $ref, slice, accepted_commit, risk_dispositions, slice_id, source_checkpoint, items, type (+7 more)
 
 ### Community 235 - "Community 235"
-Cohesion: 0.15
-Nodes (13): const, $ref, properties, authorization_scope, integrator_commit, public_release_authorized, purpose, repository (+5 more)
+Cohesion: 0.13
+Nodes (15): const, $ref, properties, authorization_scope, integrator_commit, public_release_authorized, purpose, repository (+7 more)
 
 ### Community 236 - "Community 236"
 Cohesion: 0.13
@@ -1487,16 +1440,12 @@ Cohesion: 0.13
 Nodes (14): 10. Testing, 11. Milestones, 1. Product summary, 2. Architecture, 3. Data model (SQLite), 4. API surface (REST, JSON), 5. Agent lifecycle (Claude Code plugin), 6. Ping / Q&A flow (+6 more)
 
 ### Community 238 - "Community 238"
-Cohesion: 0.22
-Nodes (17): renderMemorySection(), appendMemory(), boardDir(), consumeHandoff(), dayStamp(), listDay(), parseSections(), readIfExists() (+9 more)
+Cohesion: 0.13
+Nodes (14): ContractEnvelope, OpenWorkClient, OpenWorkResponse, TaskContract, contractEnvelope, { createElement }, cssSource, openWorkResponse (+6 more)
 
 ### Community 239 - "Community 239"
 Cohesion: 0.18
 Nodes (12): BaselineInventory, Classification, classifications, commandName(), inventory, literalArray(), quoted(), read() (+4 more)
-
-### Community 240 - "Community 240"
-Cohesion: 0.28
-Nodes (3): AgentHomeClaudeNativeEventSink, ClaudeNativeEvent, ClaudeNativeEventSink
 
 ### Community 241 - "Community 241"
 Cohesion: 0.18
@@ -1527,16 +1476,16 @@ Cohesion: 0.18
 Nodes (6): classifyOperationalFailure(), OperationalFailureKind, OperationalFailurePolicy, OperationalFailureSource, OPERATIONS_FAILURE_POLICIES, TestPlatformStore
 
 ### Community 248 - "Community 248"
-Cohesion: 0.11
-Nodes (18): dependencies, @agentclientprotocol/sdk, @anthropic-ai/claude-agent-sdk, better-sqlite3, @clerk/backend, commander, fastify, @fastify/cors (+10 more)
+Cohesion: 0.14
+Nodes (14): dependencies, @agentclientprotocol/sdk, @anthropic-ai/claude-agent-sdk, better-sqlite3, commander, fastify, @fastify/static, @hono/node-server (+6 more)
 
 ### Community 249 - "Community 249"
 Cohesion: 0.23
 Nodes (11): appendDriverTranscript(), DriverTranscriptKind, DriverTranscriptLine, isRecord(), planStepCount(), presentation(), projectDriverTranscript(), QUIET_METHODS (+3 more)
 
 ### Community 250 - "Community 250"
-Cohesion: 0.11
-Nodes (25): AgentOsApi, collectFirstRunAnswers(), displayNextSteps(), displayPlan(), FirstRunAsk, FirstRunCliDeps, oneOf(), shellArgument() (+17 more)
+Cohesion: 0.18
+Nodes (12): collectFirstRunAnswers(), displayNextSteps(), displayPlan(), FirstRunAsk, FirstRunCliDeps, oneOf(), shellArgument(), FirstRunAnswers (+4 more)
 
 ### Community 251 - "Community 251"
 Cohesion: 0.21
@@ -1547,12 +1496,12 @@ Cohesion: 0.20
 Nodes (11): checkOperatorContractCompatibility(), ORCHESTRA_OPERATOR_CONTRACT_V1, buildOperatorTelemetryEnvelope(), OPERATOR_TELEMETRY_EVENTS, OperatorTelemetryConsent, OperatorTelemetryEnvelopeV1, OperatorTelemetryEvent, OperatorTelemetryInput (+3 more)
 
 ### Community 253 - "Community 253"
-Cohesion: 0.15
-Nodes (11): mapWorkspace(), SqliteWorkspaceStore, MemoryWorkspaceStore, NewWorkspaceRecord, WorkspaceFilter, WorkspacePatch, WorkspaceStore, command() (+3 more)
+Cohesion: 0.16
+Nodes (5): PushPayload, registerPush(), harness(), MemoryCredentialStore, Sent
 
 ### Community 254 - "Community 254"
-Cohesion: 0.15
-Nodes (7): deliveryCitesCommit(), mapArtifactAttestation(), mapAutoshipIntent(), mapRegression(), mapReviewComment(), nullableString(), replayChecked()
+Cohesion: 0.17
+Nodes (5): mapRegression(), mapReviewComment(), mapShipment(), mapShipmentReceipt(), nullableString()
 
 ### Community 255 - "Community 255"
 Cohesion: 0.27
@@ -1575,32 +1524,32 @@ Cohesion: 0.19
 Nodes (13): Critical Value Analysis, Cross Tool Coordination Positioning, Edit Time and Git State Guards, Market Layer Map, Platform Absorption Risk, Shared Checkout Collision Avoidance, Zero Workflow Change, Collision Avoidance Positioning (+5 more)
 
 ### Community 260 - "Community 260"
-Cohesion: 0.13
-Nodes (15): items, minItems, type, graphifyRequest, const, additionalProperties, properties, required (+7 more)
+Cohesion: 0.15
+Nodes (13): items, minItems, type, graphifyRequest, const, additionalProperties, properties, required (+5 more)
 
 ### Community 261 - "Community 261"
-Cohesion: 0.14
-Nodes (8): HubConflictError, HubRequestError, HubRetryableError, isAbortError(), OpResult, Query, EventApplyError, homes
+Cohesion: 0.15
+Nodes (12): 04:23-04:43 | main, 12:22 | main, 12:24-12:26 | main, 13:25 | main, 13:33 | main, 14:34 | main, 14:45-16:07 | main, 16:30 | main (+4 more)
 
 ### Community 262 - "Community 262"
-Cohesion: 0.30
+Cohesion: 0.27
 Nodes (9): canonical(), evaluateBetaMonitoring(), EVENT_KEYS, EVENT_TYPES, identifier(), integer(), optionalIdentifier(), sha256() (+1 more)
 
 ### Community 263 - "Community 263"
 Cohesion: 0.24
-Nodes (12): git(), logCache, parseGitLog(), refCardIds(), remoteRef(), ShipCard, ShipCommit, ShipFile (+4 more)
+Nodes (11): git(), logCache, parseGitLog(), refCardIds(), ShipCard, ShipCommit, ShipFile, shiplog (+3 more)
 
 ### Community 264 - "Community 264"
 Cohesion: 0.23
 Nodes (10): ensureMarket(), Fixture, InsertAssignmentInput, insertBoard(), insertCard(), insertProfile(), insertWorkspace(), makeFixture() (+2 more)
 
 ### Community 265 - "Community 265"
-Cohesion: 0.12
-Nodes (14): invocationDigest(), invocationStatuses, RecordToolInvocationInput, RequestToolInvocationInput, SessionScope, SessionToolAuthorization, SessionToolPolicy, SessionToolSnapshot (+6 more)
+Cohesion: 0.30
+Nodes (12): pythonAssignmentBindsIdentifier(), pythonClassOwnsDeclaration(), pythonContainerHeader(), pythonDelimiterDepths(), pythonDirectScopeStatements(), pythonExpressionBindsIdentifier(), pythonFunctionHeader(), pythonFunctionShadowsReference() (+4 more)
 
 ### Community 266 - "Community 266"
-Cohesion: 0.18
-Nodes (7): buildDemoAction(), DemoCliDeps, run(), databases, savedEnvironment, servers, temporary
+Cohesion: 0.15
+Nodes (6): AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID, databases, savedEnvironment, servers, temporary, roots
 
 ### Community 267 - "Community 267"
 Cohesion: 0.17
@@ -1635,16 +1584,16 @@ Cohesion: 0.17
 Nodes (11): Asked, Beta Lane D — deterministic quality matrix, Central integration observation — 2026-08-02, Delivered, Evidence, Final raw-receipt and runner hardening, Integrated Lane A/C command binding addendum, P1 fail-closed evidence remediation (+3 more)
 
 ### Community 275 - "Community 275"
-Cohesion: 0.13
-Nodes (19): Bearer Token Security, Device-Attributed Audit, Device Identity and Revocation State, Fetch Metadata Policy, Functional Beta, Not Safe Remote Beta, Lost-Device Response, Master Operator Bearer, No-Tool Remote Message Path (+11 more)
+Cohesion: 0.18
+Nodes (12): Agent OS Surface Manifest, Surface Drift-Check Contract, Bearer Token Security, Device Identity and Revocation State, Fetch Metadata Policy, Functional Beta, Not Safe Remote Beta, Lost-Device Response, Master Operator Bearer (+4 more)
 
 ### Community 276 - "Community 276"
-Cohesion: 0.15
-Nodes (12): Preserve State on Uninstall, Backup, restore, and retirement, Known preview boundaries, Network and telemetry boundary, Operator preview, ORCHESTRA_HOME State Inventory, Owner Password Hash, Safe Backup and Restore Protocol (+4 more)
+Cohesion: 0.18
+Nodes (12): Ambient-Only Provider Hooks, Orchestra Beta Onboarding, Preserve State on Uninstall, Retained Tarball Verification, Network and Telemetry Boundary, Operator Preview, ORCHESTRA_HOME State Inventory, Owner Password Hash (+4 more)
 
 ### Community 277 - "Community 277"
-Cohesion: 0.12
-Nodes (16): Agent OS Workspace Cockpit, CLI reference, Configuration, FAQ, How it works, Installation status, License, Loopback Daemon Architecture (+8 more)
+Cohesion: 0.17
+Nodes (12): Explicit Provider API Mode, Fail-Closed Onboarding Plan, Owner Password Recovery, Exact Provider Acceptance Gate, Agent OS Workspace Cockpit, Local Owner Password Session, Loopback Daemon Architecture, Orchestra (+4 more)
 
 ### Community 278 - "Community 278"
 Cohesion: 0.17
@@ -1655,8 +1604,8 @@ Cohesion: 0.17
 Nodes (12): additionalProperties, properties, required, type, artifact, enum, minLength, type (+4 more)
 
 ### Community 280 - "Community 280"
-Cohesion: 0.12
-Nodes (17): toolReport, raw_artifacts, requests_sha256, tested_commit, tool_version, maxItems, minItems, type (+9 more)
+Cohesion: 0.17
+Nodes (12): toolReport, requests_sha256, tested_commit, tool_version, $ref, $ref, minLength, type (+4 more)
 
 ### Community 281 - "Community 281"
 Cohesion: 0.22
@@ -1675,8 +1624,8 @@ Cohesion: 0.18
 Nodes (10): Agent OS TOOL-014 Codex Adapter + Durable Evidence WIP Checkpoint — 2026-07-28, Delivered in this partial TOOL-014 batch, Durable acceptance contract, Exact resume procedure, Next dependency-ordered work, Observed verification, Paste-ready resume prompt, Shared-main preservation (+2 more)
 
 ### Community 285 - "Community 285"
-Cohesion: 0.15
-Nodes (18): Asked, Beta Lane A collaboration checkpoint, Current durable moved-worktree identity remediation addendum, Delivered, Delivered, Delivered, Evidence, Evidence (+10 more)
+Cohesion: 0.31
+Nodes (10): Asked, Current durable moved-worktree identity remediation addendum, Delivered, Evidence, Final independent review, Ignored-worktree preservation remediation addendum (historical; precedes the current addendum above), MILE-C acceptance summaries, Remaining and known limitations (+2 more)
 
 ### Community 286 - "Community 286"
 Cohesion: 0.18
@@ -1691,8 +1640,8 @@ Cohesion: 0.22
 Nodes (11): Awesome Agent Orchestrators, Buyer Based Open Core, Cross Vendor Table Stakes, Human Review Bottleneck, Oversight Without Takeover, Parallel Agent Demand, Product Value Research, Review Capacity Hero (+3 more)
 
 ### Community 289 - "Community 289"
-Cohesion: 0.15
-Nodes (13): devDependencies, ajv, @electric-sql/pglite, tsup, tsx, @types/better-sqlite3, @types/node, @types/pg (+5 more)
+Cohesion: 0.18
+Nodes (11): devDependencies, ajv, tsup, tsx, @types/better-sqlite3, @types/node, @types/picomatch, @types/web-push (+3 more)
 
 ### Community 290 - "Community 290"
 Cohesion: 0.18
@@ -1707,12 +1656,12 @@ Cohesion: 0.24
 Nodes (10): BARS, chunk(), crc32(), crcTable, INK, inRoundRect(), outDir, PAPER (+2 more)
 
 ### Community 293 - "Community 293"
-Cohesion: 0.08
-Nodes (16): AgentProviderService, BOARD_COMMANDS, BoardCmdCtx, COLUMN_ORDER, isBoardCommand(), MenuItem, runBoardCommand(), VERBS (+8 more)
+Cohesion: 0.25
+Nodes (7): BOARD_COMMANDS, BoardCmdCtx, COLUMN_ORDER, isBoardCommand(), MenuItem, runBoardCommand(), VERBS
 
 ### Community 294 - "Community 294"
-Cohesion: 0.06
-Nodes (38): api(), apiObjectUrl(), authenticateLocalOwnerPassword(), getToken(), LocalOwnerPasswordSession, LocalOwnerPasswordStatus, localOwnerSession, MESSAGE_KINDS (+30 more)
+Cohesion: 0.24
+Nodes (6): createLocalOwnerSessionStore(), parseExpiry(), SessionStorage, StoredSession, validSession(), MemoryStorage
 
 ### Community 295 - "Community 295"
 Cohesion: 0.18
@@ -1723,12 +1672,12 @@ Cohesion: 0.27
 Nodes (9): boardDb(), commit(), databases, git(), repositories, repositoryFixture(), sha256(), structuralInput() (+1 more)
 
 ### Community 297 - "Community 297"
-Cohesion: 0.12
-Nodes (18): crossProduct(), floatEqual(), floatZero(), getIntersection(), joinLines(), lerp(), lerpPoint(), linearOffset() (+10 more)
+Cohesion: 0.18
+Nodes (10): compilerOptions, module, moduleResolution, outDir, resolveJsonModule, skipLibCheck, strict, target (+2 more)
 
 ### Community 298 - "Community 298"
-Cohesion: 0.23
-Nodes (15): SystemInfo, SystemProviderInfo, SubscriptionUsage(), durationLabel(), highestSubscriptionUsage(), number(), percentage(), providerLimits() (+7 more)
+Cohesion: 0.31
+Nodes (5): appendIn(), boundedInteger(), normalizedLinks(), normalizedTags(), positiveInteger()
 
 ### Community 299 - "Community 299"
 Cohesion: 0.24
@@ -1788,7 +1737,7 @@ Nodes (9): Acceptance evidence, Agent Home layout, API and CLI parity, Durable A
 
 ### Community 313 - "Community 313"
 Cohesion: 0.20
-Nodes (9): Acceptance evidence, Agent OS compatibility forward migration, Compatibility range, Evidence schema, Forward-only rollback, Frozen 15-table plan, TL;DR, Upgrade procedure (+1 more)
+Nodes (9): Acceptance evidence, Agent OS compatibility forward migration, Compatibility range, Evidence schema, Forward-only rollback, Frozen 13-table plan, TL;DR, Upgrade procedure (+1 more)
 
 ### Community 314 - "Community 314"
 Cohesion: 0.20
@@ -1835,12 +1784,12 @@ Cohesion: 0.22
 Nodes (8): Asked, Canonical launch response, Canonical lifecycle acceptance, Delivered / Evidence / Remaining handoff, Executable evidence, Remaining integration work, TL;DR, UI behavior
 
 ### Community 326 - "Community 326"
-Cohesion: 0.17
-Nodes (16): breakdownChild(), CardRow, contract(), criteriaCount(), FUNNEL_KINDS, FUNNEL_LEVELS, FunnelError, funnelGate (+8 more)
+Cohesion: 0.25
+Nodes (9): Device-Attributed Audit, No-Tool Remote Message Path, Offline Read-Only Semantics, Remote Request Default-Deny Policy, Resource-Bound Device Scopes, Resource-Bound Step-Up Grants, REM-GATE Safe Remote Beta Gate, Terminal and Source Authority (+1 more)
 
 ### Community 327 - "Community 327"
-Cohesion: 0.12
-Nodes (15): extends, lockFileMaintenance, enabled, schedule, packageRules, prConcurrentLimit, rangeStrategy, rebaseWhen (+7 more)
+Cohesion: 0.22
+Nodes (8): Addendum (2026-07-18): native-vendor absorption — now assessed from primary sources, Confirmed findings (all survived 3-0 verification unless noted), Open questions worth pursuing, Orchestra — Product Value Deep Research (2026-07-18), Stats, The three highest-value bets, Verdict, What we could NOT verify (honest gaps)
 
 ### Community 328 - "Community 328"
 Cohesion: 0.22
@@ -1850,13 +1799,9 @@ Nodes (9): $ref, $ref, gitnexus, graphify, tool_reports, additionalProperties, p
 Cohesion: 0.22
 Nodes (8): actualSha256, archive, archiveBytes, binary, contract, evidenceDirectory, scriptDirectory, toolsDirectory
 
-### Community 330 - "Community 330"
-Cohesion: 0.16
-Nodes (7): claimNext(), isReady(), milestoneRankBetween(), rankBetween(), RankedRow, RankPosition, setup()
-
 ### Community 331 - "Community 331"
-Cohesion: 0.08
-Nodes (17): AGENT_EFFORT_LEVELS, AgentDefaultProfile, AgentDefaults, AgentEffort, AgentProviderModel, ProviderAuthStatus, ProviderUpdateState, AgentProfileEditor() (+9 more)
+Cohesion: 0.22
+Nodes (6): emptyDraft, SupportCasePanel(), SupportDraft, React, { renderToStaticMarkup }, requireFromWeb
 
 ### Community 332 - "Community 332"
 Cohesion: 0.25
@@ -1875,8 +1820,8 @@ Cohesion: 0.25
 Nodes (7): Beta Lane D onboarding/docs/support integration handoff, Central integration steps, Final trust-boundary remediation evidence, Isolated modules, Owned PKG evidence, P1 remediation evidence, Residual P1 remediation evidence
 
 ### Community 336 - "Community 336"
-Cohesion: 0.22
-Nodes (8): Asked, Beta Lane D — outcome analytics candidate, Bounded candidate checkpoint, Central integration observation — 2026-08-02, Delivered, Evidence, Remaining, Root integration
+Cohesion: 0.25
+Nodes (7): Asked, Bounded candidate checkpoint, Central integration observation — 2026-08-02, Delivered, Evidence, Remaining, Root integration
 
 ### Community 337 - "Community 337"
 Cohesion: 0.25
@@ -1891,12 +1836,12 @@ Cohesion: 0.25
 Nodes (7): Capability model, Durable session behavior, Real-evidence limitations, Release rule, Server integration, Tool capability, permission, and provenance contract, Web integration
 
 ### Community 340 - "Community 340"
-Cohesion: 0.22
-Nodes (13): bashDecision(), deny(), isMastermindName(), mastermindRules(), mastermindToolDecision(), ORCHESTRA_VERBS, READ_ONLY_TOOLS, ScopeDecision (+5 more)
+Cohesion: 0.25
+Nodes (7): 1. Where the market actually is, 2. Honest assessment of Orchestra's current value, 3. Angles worth tackling (ranked), 4. Scope decision (2026-07-17): same repo, same checkout, different tasks, 5. Recommendation, Orchestra — Critical Value & Positioning Analysis, Sources
 
 ### Community 341 - "Community 341"
-Cohesion: 0.16
-Nodes (8): AuthProbe, parseQwen(), PROBES, ProviderAuthStatus, providerLoginCommand(), qwenSettingsAuthSelection(), readProviderAuthStatus(), resolveExecutableOnPath()
+Cohesion: 0.25
+Nodes (7): Growth levers (from DX sweep), Orchestra — Product Value-Add Audit (2026-07-18), P0 — Launch blockers, P1 — Highest-value product improvements, P2 — Hardening & polish, Suggested sequence, Verdict
 
 ### Community 342 - "Community 342"
 Cohesion: 0.36
@@ -1907,8 +1852,8 @@ Cohesion: 0.39
 Nodes (5): LEAK_SIGNATURES, messageBody(), readStdinBody(), substitutionWarning(), ROOT
 
 ### Community 344 - "Community 344"
-Cohesion: 0.31
-Nodes (9): exactAcceptance(), assertExact(), attestRemoteSecuritySchema(), expected(), installRemoteSecuritySchema(), normalizedSql(), OWNED_OBJECTS, records() (+1 more)
+Cohesion: 0.43
+Nodes (7): assertExact(), attestRemoteSecuritySchema(), expected(), normalizedSql(), OWNED_OBJECTS, records(), SchemaRecord
 
 ### Community 345 - "Community 345"
 Cohesion: 0.48
@@ -1943,8 +1888,8 @@ Cohesion: 0.29
 Nodes (6): Asked, Beta Lane D QA-016 production-bound chaos evidence, Central integration observation — 2026-08-02, Delivered, Evidence and closure boundary, Rollback
 
 ### Community 353 - "Community 353"
-Cohesion: 0.25
-Nodes (7): Asked, Beta Lane D stack integration checkpoint, Delivered, Evidence, Final integration seams, Remaining, Superseding central integration observation — 2026-08-02
+Cohesion: 0.29
+Nodes (6): Asked, Delivered, Evidence, Final integration seams, Remaining, Superseding central integration observation — 2026-08-02
 
 ### Community 354 - "Community 354"
 Cohesion: 0.29
@@ -1975,16 +1920,16 @@ Cohesion: 0.29
 Nodes (6): Accessibility, High impact, Minor, Suggested order, UX / polish, Web UI Audit — orchestra web (web/)
 
 ### Community 361 - "Community 361"
-Cohesion: 0.25
-Nodes (7): bounceDeadLetters(), reap(), reapAttention(), reapZombieSessions(), removeAgentCards(), syncAgentProfiles(), setup()
+Cohesion: 0.29
+Nodes (6): 17:09 | main, 17:30-18:03 | main, 18:26 | main, 18:35-18:40 | main, 19:19 | main, 19:24-20:54 | main
 
 ### Community 362 - "Community 362"
-Cohesion: 0.04
-Nodes (67): AgentSessionControlHost, registerAgentSessionControlRoutes(), deleteBoardCascade(), LocalOwnerAuthError, DEFAULT_PASTE_IMAGE_ROOT(), PASTED_IMAGE_TYPES, savePastedImage(), validatePastedImage() (+59 more)
+Cohesion: 0.52
+Nodes (5): isShippedMatch(), isSimilar(), similarity(), STOP, tokens()
 
 ### Community 363 - "Community 363"
-Cohesion: 0.27
-Nodes (13): cleanField(), dataDir(), endpoints, formatInjectedMessage(), injectTerminalMessage(), load(), persist(), recordTerminalEndpoint() (+5 more)
+Cohesion: 0.33
+Nodes (3): optionalIso(), optionalText(), timestamp()
 
 ### Community 364 - "Community 364"
 Cohesion: 0.33
@@ -2003,8 +1948,8 @@ Cohesion: 0.33
 Nodes (5): Local data, backup, restore, reset, and migration, Migrations and downgrade, Ownership and locations, Restore and reset, Verified backup
 
 ### Community 368 - "Community 368"
-Cohesion: 0.14
-Nodes (13): Architecture in one paragraph, Environment variables, Hosting Orchestra Cloud, Local single-machine mode is unaffected, Provisioning order, Railway config, Step 8: smoke test (UNEXECUTED), Vercel config (+5 more)
+Cohesion: 0.33
+Nodes (5): Beta launch checklist, Exact-candidate verification, Human approval and public actions, Integrated and locally verified, Provider and product acceptance
 
 ### Community 369 - "Community 369"
 Cohesion: 0.40
@@ -2023,12 +1968,12 @@ Cohesion: 0.33
 Nodes (4): contract, output, versionOutput, versionResult
 
 ### Community 373 - "Community 373"
-Cohesion: 0.14
-Nodes (13): Done Criteria, File Structure, Global Constraints, Orchestra Cloud — Auth, Billing, UI, Deploy (Plan 3 of 3), Task 1: Hub-only entrypoint and Railway readiness, Task 2: CORS and the browser→hub client, Task 3: Clerk JWT verification in the hub, Task 4: Clerk webhooks and the identity mirror (+5 more)
+Cohesion: 0.06
+Nodes (18): AgentHomeRuntimeControl, RuntimeActionCapabilities, AgentHomeRouteOptions, orchestrationIdentity, OrchestrationIdentitySource, OrchestrationLifecycle, actor, agentHeaders (+10 more)
 
 ### Community 374 - "Community 374"
-Cohesion: 0.33
-Nodes (5): Asked, Beta Lane C remediation candidate, Delivered, Evidence, Remaining
+Cohesion: 0.40
+Nodes (4): Asked, Delivered, Evidence, Remaining
 
 ### Community 375 - "Community 375"
 Cohesion: 0.40
@@ -2045,10 +1990,6 @@ Nodes (5): items, minItems, type, $ref, artifacts
 ### Community 378 - "Community 378"
 Cohesion: 0.40
 Nodes (5): Agentic OS Milestone, Daemon Token Auth, Remote PWA Push, Session Log, Token Diet and Controls
-
-### Community 379 - "Community 379"
-Cohesion: 0.14
-Nodes (13): Done Criteria for Plan 1, File Structure, Global Constraints, Orchestra Hub — Server Core Implementation Plan (Plan 1 of 3), Task 1: Hub SQL seam, errors, and migration runner, Task 2: Work schema and the per-org event log, Task 3: Card ops with optimistic concurrency, Task 4: Device tokens (+5 more)
 
 ### Community 380 - "Community 380"
 Cohesion: 0.40
@@ -2083,8 +2024,8 @@ Cohesion: 0.50
 Nodes (3): Operator commands, Remote and mobile beta, Security boundary
 
 ### Community 390 - "Community 390"
-Cohesion: 0.25
-Nodes (8): Allowlisted Diagnostics Bundle, Before reporting a problem, Digest-Bound Support Case, Do not share, Prepare one local support-case export, Sensitive Data Exclusion Boundary, Support preview, What this guidance does not prove
+Cohesion: 0.67
+Nodes (4): Allowlisted Diagnostics Bundle, Digest-Bound Support Case, Sensitive Data Exclusion Boundary, Support Preview
 
 ### Community 391 - "Community 391"
 Cohesion: 0.50
@@ -2107,8 +2048,8 @@ Cohesion: 0.50
 Nodes (3): ORCHESTRA_HOME, ORCHESTRA_PORT, e2e.sh script
 
 ### Community 397 - "Community 397"
-Cohesion: 0.14
-Nodes (13): 1. Data model (additive), 2. Ranking + `orchestra next`, 3. Kanban view (web), 4. Hygiene: gates + nudges, 5. Epics (milestone upgrade), 6. Delivery ledger (read-only projection), 7. Testing & failure modes, Backlog System Design — rank, kanban, readiness, epics, ledger (+5 more)
+Cohesion: 0.83
+Nodes (3): git(), recordShipped(), resolveCommit()
 
 ### Community 398 - "Community 398"
 Cohesion: 0.50
@@ -2119,20 +2060,20 @@ Cohesion: 0.50
 Nodes (3): operationsRoot, root, sources
 
 ### Community 403 - "Community 403"
-Cohesion: 0.15
-Nodes (13): c(), CanvasContext(), createQuaternion(), g(), getValueAtCurrentTime(), initialize$2(), initiateExpression(), interpolateValue() (+5 more)
+Cohesion: 0.67
+Nodes (3): engines, node, npm
 
 ### Community 404 - "Community 404"
 Cohesion: 0.67
 Nodes (3): repository, type, url
 
 ### Community 407 - "Community 407"
-Cohesion: 0.15
-Nodes (12): Approach (C — hybrid), Communication & hierarchy at runtime, Data model, Decisions (locked with operator), Error handling, Goal, Mastermind, Phases (tickets) (+4 more)
+Cohesion: 0.67
+Nodes (3): minLength, type, case
 
 ### Community 408 - "Community 408"
-Cohesion: 0.15
-Nodes (12): 10. Testing, 11. Build Order — three plans, 1. Problem & Goals, 2. Architecture Overview, 3. Data Model (Postgres), 4. Auth & Billing, 5. Sync Protocol, 6. Presence & Activity (+4 more)
+Cohesion: 0.67
+Nodes (3): minLength, type, log_path
 
 ### Community 409 - "Community 409"
 Cohesion: 0.67
@@ -2158,229 +2099,33 @@ Nodes (3): minimum, type, limit
 Cohesion: 0.67
 Nodes (3): minimum, type, offset
 
-### Community 415 - "Community 415"
-Cohesion: 0.27
-Nodes (10): detectGitnexus(), detectGraphify(), detectIntegrations(), detectObsidian(), IntegrationStatus, isDirectory(), isFile(), readIfFile() (+2 more)
-
-### Community 420 - "Community 420"
-Cohesion: 0.17
-Nodes (12): createNS(), HShapeElement(), ShapeGroupData(), SVGDropShadowEffect(), SVGFillFilter(), SVGGaussianBlurEffect(), SVGMatte3Effect(), SVGProLevelsFilter() (+4 more)
-
 ### Community 421 - "Community 421"
 Cohesion: 0.67
 Nodes (3): Orchestra HTML Shell, Progressive Web App Metadata, React Mountpoint
-
-### Community 428 - "Community 428"
-Cohesion: 0.23
-Nodes (3): CodexMethodParams, CodexMethodResult, RecordingPort
-
-### Community 429 - "Community 429"
-Cohesion: 0.33
-Nodes (3): CapacityRequest, observabilityProbe(), OperationsCapacityAdmission
-
-### Community 430 - "Community 430"
-Cohesion: 0.17
-Nodes (11): Done Criteria, Global Constraints, Known constraints worth respecting, Orchestra Daemon Sync Client — Plan 2 of 3, Task 1: `orchestra org join` and credential storage, Task 2: The hub client, Task 3: The offline queue, Task 4: The sync loop (+3 more)
-
-### Community 451 - "Community 451"
-Cohesion: 0.18
-Nodes (10): compilerOptions, module, moduleResolution, outDir, resolveJsonModule, skipLibCheck, strict, target (+2 more)
 
 ### Community 455 - "Community 455"
 Cohesion: 0.15
 Nodes (13): stringArray(), CreatePolicy, evaluate(), evaluatePolicy(), mapPolicy(), normalizePolicyOperation(), patternsFor(), Policy (+5 more)
 
-### Community 456 - "Community 456"
-Cohesion: 0.24
-Nodes (9): DaemonOrgSyncHandle, StartDaemonOrgSyncOptions, HubSyncEvent, SyncLoopOptions, handles, homes, Pair, startSimulatedDaemon() (+1 more)
-
-### Community 457 - "Community 457"
-Cohesion: 0.18
-Nodes (10): Backlog System Implementation Plan, Global Constraints, Task 1: Schema + rank service (P1), Task 2: API + CLI (P1), Task 3: Kanban tab (P1), Task 4: DoR gate + triage + draft contract (P2), Task 5: Staleness nudges (P2), Task 6: Epic upgrade (P3) (+2 more)
-
-### Community 458 - "Community 458"
-Cohesion: 0.18
-Nodes (11): const, additionalProperties, required, type, detectRequest, additionalProperties, properties, required (+3 more)
-
-### Community 459 - "Community 459"
-Cohesion: 0.18
-Nodes (10): build, builder, dockerfilePath, deploy, healthcheckPath, healthcheckTimeout, restartPolicyMaxRetries, restartPolicyType (+2 more)
-
-### Community 460 - "Community 460"
-Cohesion: 0.20
-Nodes (10): createSizedArray(), CVCompElement(), CVMaskElement(), DashProperty(), HCompElement(), MaskElement(), ShapeCollection(), ShapePath() (+2 more)
-
-### Community 461 - "Community 461"
-Cohesion: 0.20
-Nodes (10): Ambient-Only Provider Hooks, Explicit provider API mode, Fail-Closed Onboarding Plan, Orchestra Beta Onboarding, Owner Password Recovery, Exact Provider Acceptance Gate, Retained Tarball Verification, Local Owner Password Session (+2 more)
-
-### Community 462 - "Community 462"
-Cohesion: 0.20
-Nodes (9): File Structure, Global Constraints, Phase 3 Workflow Bundle Implementation Plan, Self-Review Notes, Task 1: Memory + handoff store (`src/memory.ts`), Task 2: CLI commands `remember` + `handoff` + hook injection, Task 3: Workflows pack + `orchestra install --workflows`, Task 4: `orchestra integrations` detector + rules parity audit (+1 more)
-
-### Community 463 - "Community 463"
-Cohesion: 0.20
-Nodes (9): Approach (hybrid — chosen), Components & data flow, Done when, Error handling, Goal, Inbox revamp: email-style Messages tab, Producer gap: agents cannot address the operator, Testing (+1 more)
-
-### Community 464 - "Community 464"
-Cohesion: 0.20
-Nodes (9): Approach chosen, Goal, Licensing decision, Orchestra plug-and-play release train — design, Phase 1 — Relicense, Phase 2 — Plug-and-play core, Phase 3 — Workflow bundle ("everything my local system uses"), Phase 4 — Launch (+1 more)
-
-### Community 465 - "Community 465"
-Cohesion: 0.27
-Nodes (6): OrgCliDeps, registerOrgCommands(), verificationPath(), verifyOrgCredential(), setup(), valid
-
-### Community 466 - "Community 466"
-Cohesion: 0.20
-Nodes (4): CanonicalLifecycleRecord, DeliveryReport, Job, OsEvent
-
-### Community 467 - "Community 467"
-Cohesion: 0.25
-Nodes (6): DaemonLease, ActiveFixture, Fault, FIXED_NOW, LIFECYCLE_TRANSITIONS, LifecycleEvidence
-
-### Community 469 - "Community 469"
-Cohesion: 0.33
-Nodes (7): isSafeTokenAccountingValue(), isSensitiveMetadataKey(), normalizeSensitiveKey(), redactValue(), SAFE_TOKEN_ACCOUNTING_KEYS, StructuredRedactionResult, pem
-
-### Community 470 - "Community 470"
-Cohesion: 0.22
-Nodes (8): After onboarding, Getting started with Orchestra beta, Private tarball: verify, install, inspect, Provider truth, Quickstart (published install), Stop, support, and remove, The safe first run, What a tester must receive
-
-### Community 471 - "Community 471"
-Cohesion: 0.22
-Nodes (8): FSL Relicense + npm Plug-and-Play Init — Implementation Plan, Global Constraints, Self-Review Notes, Task 1: FSL-1.1-ALv2 license swap + guard test, Task 2: README licensing + installation sections, Task 3: `src/init-cli.ts` — one-command init (TDD), Task 4: Wire `init` into the CLI + surface inventory, Task 5: Publish preflight — pack verification, docs flip, name check
-
-### Community 472 - "Community 472"
-Cohesion: 0.33
-Nodes (8): addBoard(), commitFile(), git(), GRAPH, REPORT, repository(), seededRepository(), temporary
-
-### Community 473 - "Community 473"
-Cohesion: 0.50
-Nodes (8): $bm_isInstanceOfArray(), $bm_neg(), div(), isNumerable(), mul(), sub(), sum(), _typeof$1()
-
-### Community 475 - "Community 475"
-Cohesion: 0.33
-Nodes (5): upgradeCompatibilityTelemetryEnumContracts(), ColumnInfo, ExpectedSchemaObject, normalizeSchemaSql(), upgradeEnumOnlySchemaDrift()
-
-### Community 476 - "Community 476"
-Cohesion: 0.29
-Nodes (6): `demo-join.json`, `demo-mail.json`, `demo-memory.json`, `demo-review.json`, Landing-site Lottie audit, Verification method
-
-### Community 477 - "Community 477"
-Cohesion: 0.33
-Nodes (7): getPerpendicularVector(), getProjectingAngle(), length(), normalize(), setPoint(), zigZagCorner(), zigZagSegment()
-
-### Community 478 - "Community 478"
-Cohesion: 0.29
-Nodes (6): Cross-task pairs (shared files or interfaces), Per-task self-consistency, Pre-flight conflict scan, Progress, Rulings, SDD ledger — plan: /Users/arminrad/Desktop/agentboard-hub-cloud/docs/superpowers/plans/2026-08-28-orchestra-hub-cloud.md
-
-### Community 479 - "Community 479"
-Cohesion: 0.29
-Nodes (6): Cross-task pairs (shared files or interfaces), Per-task self-consistency, Pre-flight conflict scan, Progress, Rulings, SDD ledger — plan: /Users/arminrad/Desktop/agentboard-hub-core/docs/superpowers/plans/2026-08-28-orchestra-hub-core.md
-
-### Community 480 - "Community 480"
-Cohesion: 0.52
-Nodes (5): captureGraphifyStatus(), hasSymlinkComponent(), invariant(), regularInside(), sha256()
-
-### Community 481 - "Community 481"
-Cohesion: 0.29
-Nodes (6): Design, Error handling, Local terminal agents: stream conversation into Orchestra UI, Out of scope, Problem, Testing
-
-### Community 482 - "Community 482"
-Cohesion: 0.38
-Nodes (6): boardIdFromSearch(), cardDrawerDeepLink(), CardDrawerSelection, cardIdFromSearch(), LocationParts, positiveIdFromSearch()
-
-### Community 483 - "Community 483"
-Cohesion: 0.29
-Nodes (6): buildApprovalBody(), summarizeTrackbookDelivery(), cardDrawerSource, drawerSource, trackbookCss, trackbookSource
-
-### Community 484 - "Community 484"
-Cohesion: 0.29
-Nodes (6): buildCommand, framework, installCommand, outputDirectory, rewrites, $schema
-
-### Community 485 - "Community 485"
-Cohesion: 0.33
-Nodes (5): Contributing to Orchestra, Development setup, Ground rules, Pull requests, Reporting bugs
-
-### Community 486 - "Community 486"
-Cohesion: 0.33
-Nodes (6): Canonical, Compatibility, Database tables, Hub (Postgres) database tables, Infrastructure, Legacy
-
-### Community 487 - "Community 487"
-Cohesion: 0.33
-Nodes (6): Canonical routes, Compatibility routes, HTTP APIs, Hub cross-organization trust boundary, Infrastructure routes, Legacy routes
-
-### Community 489 - "Community 489"
-Cohesion: 0.47
-Nodes (5): main(), NATIVE_PACKAGES, require, resolveBundledCli(), run()
-
-### Community 491 - "Community 491"
-Cohesion: 0.33
-Nodes (5): 1. Understand before sketching, 2. Plan and register the work, 3. Build in a worktree, 4. Verify and capture, 5. Hand back
-
-### Community 492 - "Community 492"
-Cohesion: 0.60
-Nodes (5): addBrightnessToRGB(), addHueToRGB(), addSaturationToRGB(), HSVtoRGB(), RGBtoHSV()
-
-### Community 493 - "Community 493"
-Cohesion: 0.40
-Nodes (4): Reporting a vulnerability, Scope, Security Policy, Supported versions
-
-### Community 494 - "Community 494"
-Cohesion: 0.50
-Nodes (4): collectReachableChunks(), repoRoot, resolveRelativeSpecifier(), run
-
-### Community 495 - "Community 495"
-Cohesion: 0.50
-Nodes (4): externalDigest(), nonNegativeInteger(), optionalBounded(), reviewLocation()
-
-### Community 496 - "Community 496"
-Cohesion: 0.50
-Nodes (4): boxIntersect(), intersectData(), intersectsImpl(), splitData()
-
-### Community 497 - "Community 497"
-Cohesion: 0.50
-Nodes (3): 0.1.0 — 2026-08-25, 0.1.1 — 2026-08-26, Changelog
-
-### Community 498 - "Community 498"
-Cohesion: 0.50
-Nodes (3): api, css, view
-
-### Community 499 - "Community 499"
-Cohesion: 0.67
-Nodes (3): addDecorator(), addEffect(), initialize()
-
-### Community 500 - "Community 500"
-Cohesion: 0.67
-Nodes (3): Compatibility Migration Manifest, Forward-Only Compatibility Migration, Legacy Projection Contract
-
-### Community 502 - "Community 502"
-Cohesion: 0.67
-Nodes (3): test_files, minimum, type
-
-### Community 503 - "Community 503"
-Cohesion: 0.67
-Nodes (3): repo, minLength, type
-
 ## Knowledge Gaps
-- **3299 isolated node(s):** `supabase`, `schema_version`, `evidence_id`, `classification`, `capture_base_head` (+3294 more)
+- **2974 isolated node(s):** `schema_version`, `evidence_id`, `classification`, `capture_base_head`, `capture_tree_state` (+2969 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **49 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **43 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `openDb()` connect `Conductor Agent SDK` to `Database and Server Tests`, `Daemon Lifecycle and Reaping`, `Package Build Config`, `Auto-Wake Scheduler`, `Web Build Config`, `Community 135`, `Community 264`, `Delivery Report Domain`, `Community 266`, `Review and Server Events`, `Community 263`, `Community 139`, `Product Research Notes`, `Claude Agent Driver`, `Community 144`, `Trackbook User Interface`, `Community 150`, `Community 151`, `App Auth and Telemetry`, `Community 153`, `Auto-Wake Scheduler`, `Conductor Delivery Engine`, `Community 160`, `Agent OS Trackbook Docs`, `Community 164`, `Community 293`, `Provider Agent Manager`, `Roadmap and Milestones UI`, `Community 296`, `Community 170`, `Community 171`, `Agent Naming and Providers`, `Community 299`, `Codex App Server Supervisor`, `Community 175`, `Community 176`, `Codex App Server Client`, `Card Trackbook Summary`, `Community 178`, `Community 180`, `Hook Installation`, `Coordination Core Concepts`, `Community 187`, `Community 188`, `Mobile PWA Features`, `Agent OS CLI`, `Board Domain UI`, `Agent Terminal UI`, `Launch and Usage Notes`, `Community 330`, `Model Effort Controls`, `Security and UX Audits`, `Community 467`, `Community 211`, `Driver Registry`, `SQLite Workspace Store`, `Community 343`, `Community 214`, `PWA Icon Generator`, `Board Command Menu`, `Community 472`, `Agent Terminal UI`, `Community 221`, `Community 222`, `Community 224`, `Product Value Analysis`, `Community 361`, `Community 362`, `Community 239`, `Message Feed Tests`, `App Icon Style`, `Archive`, `Service Worker Shell`?**
-  _High betweenness centrality (0.067) - this node is a cross-community bridge._
-- **Why does `_()` connect `Delivery Result Mutations` to `Community 420`, `Community 169`, `Community 297`, `Community 492`, `Community 460`, `Community 496`, `Community 499`, `Community 403`, `Community 473`, `Community 477`?**
-  _High betweenness centrality (0.030) - this node is a cross-community bridge._
-- **Why does `fromSdkUsage()` connect `App Auth and Telemetry` to `Community 169`?**
-  _High betweenness centrality (0.027) - this node is a cross-community bridge._
-- **What connects `supabase`, `schema_version`, `evidence_id` to the rest of the system?**
-  _3315 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Why does `openDb()` connect `Conductor Agent SDK` to `Database and Server Tests`, `Daemon Lifecycle and Reaping`, `Package Build Config`, `Auto-Wake Scheduler`, `Web Build Config`, `Community 135`, `Community 264`, `Delivery Report Domain`, `Community 266`, `Review and Server Events`, `Community 140`, `Community 263`, `Community 139`, `Claude Agent Driver`, `Community 144`, `Trackbook User Interface`, `App Auth and Telemetry`, `Community 150`, `Community 151`, `Community 153`, `Async Queues and Policies`, `Auto-Wake Scheduler`, `Agent OS Trackbook Docs`, `PTY Driver Contracts`, `Community 293`, `Provider Agent Manager`, `Codex Server Requests`, `Roadmap and Milestones UI`, `Community 296`, `Community 170`, `Community 171`, `Agent Naming and Providers`, `Community 299`, `Codex App Server Supervisor`, `Community 175`, `Community 176`, `Codex App Server Client`, `Card Trackbook Summary`, `Community 178`, `Community 180`, `Hook Installation`, `Community 187`, `Community 188`, `Mobile PWA Features`, `Daemon Lease and Approval`, `Board Domain UI`, `Agent Terminal UI`, `Remote Access and Auth`, `Launch and Usage Notes`, `Security and UX Audits`, `Release Launch Gates`, `Community 211`, `SQLite Workspace Store`, `Community 343`, `Community 214`, `Community 221`, `Community 224`, `Product Value Analysis`, `Web UI Audit`, `Community 239`, `Message Feed Tests`, `Community 373`, `Review and Server Events`, `Archive`, `Service Worker Shell`, `Community 253`, `Package Binary Fix`?**
+  _High betweenness centrality (0.049) - this node is a cross-community bridge._
+- **Why does `AttentionService` connect `Auto-Wake Scheduler` to `Database and Server Tests`, `Path Overlap Detection`, `Daemon Lifecycle and Reaping`, `Checkpoint Context Services`, `Claude Agent Driver`, `Card Trackbook Summary`, `Archived Session History`, `Community 213`, `Driver Registry`?**
+  _High betweenness centrality (0.029) - this node is a cross-community bridge._
+- **Why does `timestamp()` connect `Driver Registry` to `Database and Server Tests`, `Daemon Lifecycle and Reaping`, `Delivery Report Domain`, `Review and Server Events`, `Checkpoint Context Services`, `Claude Agent Driver`, `Shipped History UI`, `Community 149`, `Auto-Wake Scheduler`, `Conductor Delivery Engine`, `Agent Naming and Providers`, `Card Trackbook Summary`, `Web Push Registration`, `Coordination Core Concepts`, `Durable Job Scheduler`, `Agent OS CLI`, `Community 455`, `Community 202`, `Security and UX Audits`, `Community 208`, `Community 213`, `Agent Terminal UI`, `Codex Integration Docs`, `Community 226`, `Review and Server Events`?**
+  _High betweenness centrality (0.026) - this node is a cross-community bridge._
+- **What connects `schema_version`, `evidence_id`, `classification` to the rest of the system?**
+  _2992 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Database and Server Tests` be split into smaller, more focused modules?**
-  _Cohesion score 0.0219588706866504 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.018294748729531338 - nodes in this community are weakly interconnected._
 - **Should `Conductor Agent SDK` be split into smaller, more focused modules?**
-  _Cohesion score 0.020480225988700564 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.0265527950310559 - nodes in this community are weakly interconnected._
 - **Should `Model Effort Controls` be split into smaller, more focused modules?**
-  _Cohesion score 0.03870967741935484 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.04146161417322835 - nodes in this community are weakly interconnected._
