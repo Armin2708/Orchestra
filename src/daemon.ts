@@ -6,6 +6,11 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import {
+  startDaemonOrgSync,
+  type DaemonOrgSyncHandle,
+  type LocalSyncAgent,
+} from './org-sync/daemon-integration.js'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
 import { reap, bounceDeadLetters } from './reaper.js'
@@ -466,6 +471,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let vapidKeys: VapidKeys | undefined
   let vapidCredentialReason = 'vapid_credentials_not_checked'
   let runtimeReconciled = false
+  let orgSync: DaemonOrgSyncHandle | null = null
   const safeShutdown = new SafeShutdownCoordinator()
   const trackedActiveWork = new Map<string, () => void>()
   const reconcileActiveWork = () => {
@@ -977,6 +983,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     stopProducers()
     process.off('SIGTERM', close)
     process.off('SIGINT', close)
+    await orgSync?.stop()
     const report = await operationsCoordinator.close()
     assertOperationsShutdownClean(report)
     operationsRuntime.close()
@@ -999,6 +1006,11 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     runtimeReconciled = true
     reconcileActiveWork()
     await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
+    orgSync = await startDaemonOrgSync({
+      home: orchestraDataDir,
+      listLocalAgents: () => db.prepare(`SELECT id, board_id, name, status, last_seen
+        FROM agents WHERE status <> 'gone' ORDER BY board_id, name`).all() as LocalSyncAgent[],
+    })
   } catch (error) {
     if (coordinatorStarted) {
       const report = await operationsCoordinator.close()
