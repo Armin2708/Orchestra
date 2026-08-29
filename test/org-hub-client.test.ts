@@ -125,6 +125,29 @@ describe('HubClient', () => {
     await expect(streaming).rejects.toMatchObject({ name: 'AbortError' })
   })
 
+  it('classifies malformed or non-SSE stream responses as retryable', async () => {
+    const malformedResponses: Handler[] = [
+      (_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html' })
+        response.end('<html>temporary proxy page</html>')
+      },
+      (_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.end('data: {"seq":1')
+      },
+      (_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.end('data: {"kind":"card.created"}\n\n')
+      },
+    ]
+
+    for (const respond of malformedResponses) {
+      handler = respond
+      await expect(client.streamSince(0, async () => undefined, new AbortController().signal))
+        .rejects.toMatchObject({ name: 'HubRetryableError', retryable: true, status: 200 })
+    }
+  })
+
   it('times out ordinary hub reads and writes when the server never responds', async () => {
     handler = () => undefined
     const shortDeadlineClient = new HubClient(credential, { requestTimeoutMs: 25 })

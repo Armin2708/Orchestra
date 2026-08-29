@@ -123,7 +123,7 @@ export class HubClient {
     }
     const contentType = response.headers.get('content-type') ?? ''
     if (!contentType.toLowerCase().includes('text/event-stream') || !response.body) {
-      throw new HubRequestError('hub returned an invalid sync stream', response.status)
+      throw new HubRetryableError('hub returned an invalid sync stream', response.status)
     }
 
     const reader = response.body.getReader()
@@ -158,10 +158,10 @@ export class HubClient {
     if (data.length === 0) return
     let event: unknown
     try { event = JSON.parse(data.join('\n')) } catch {
-      throw new HubRequestError('hub sent invalid JSON in the sync stream', 200)
+      throw new HubRetryableError('hub sent invalid JSON in the sync stream', 200)
     }
     if (!event || typeof event !== 'object' || !Number.isInteger((event as any).seq)) {
-      throw new HubRequestError('hub sent an invalid sync event', 200)
+      throw new HubRetryableError('hub sent an invalid sync event', 200)
     }
     await onEvent(event as HubSyncEvent)
   }

@@ -150,6 +150,9 @@ describe('organization sync end to end', () => {
     })
     const cardId = (created.result as any).id
 
+    // PGlite runs this fixture through one connection, so these calls are serialized.
+    // This verifies the first-writer-wins protocol result and 409 payload, but it does
+    // not prove production Postgres row-lock behavior under genuinely concurrent transactions.
     const attempts = await Promise.allSettled([
       setup.clientA.postOp('card.claim', { card_id: cardId, agent: 'alice' }),
       setup.clientB.postOp('card.claim', { card_id: cardId, agent: 'bob' }),
