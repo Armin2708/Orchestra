@@ -312,6 +312,13 @@ export function installLocalBoardSyncSchema(db: Database.Database): void {
       PRIMARY KEY(org_id, event_key),
       UNIQUE(org_id, seq)
     );
+    UPDATE agents SET org_sync_remote_origin=(
+      SELECT MIN(mapping.org_id) FROM org_sync_agent_mappings mapping
+      WHERE mapping.local_agent_id=agents.id
+    )
+    WHERE org_sync_remote_origin IS NULL
+      AND EXISTS (SELECT 1 FROM org_sync_agent_mappings mapping
+        WHERE mapping.local_agent_id=agents.id);
   `)
 }
 

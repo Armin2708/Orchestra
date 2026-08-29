@@ -182,6 +182,28 @@ describe('daemon organization sync integration', () => {
     db.close()
   })
 
+  it('backfills remote origin for an agent mirrored before the origin column existed', () => {
+    const db = openDb(':memory:')
+    db.prepare(`INSERT INTO boards (project_path, name) VALUES ('/project', 'Project')`).run()
+    const agentId = Number(db.prepare(`INSERT INTO agents (board_id, name, status)
+      VALUES (1, 'legacy-remote', 'idle')`).run().lastInsertRowid)
+    db.exec(`CREATE TABLE org_sync_agent_mappings (
+      org_id TEXT NOT NULL,
+      hub_agent_id TEXT NOT NULL,
+      local_agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      PRIMARY KEY(org_id, hub_agent_id)
+    )`)
+    db.prepare(`INSERT INTO org_sync_agent_mappings (org_id, hub_agent_id, local_agent_id)
+      VALUES (?, 'hub_legacy', ?)`).run(credential.orgId, agentId)
+
+    new LocalBoardState({ db, orgId: credential.orgId })
+
+    expect(db.prepare('SELECT org_sync_remote_origin FROM agents WHERE id=?').get(agentId))
+      .toEqual({ org_sync_remote_origin: credential.orgId })
+    expect(listLocalPresenceAgents(db)).toEqual([])
+    db.close()
+  })
+
   it('stops the loop and heartbeat timer cleanly', async () => {
     vi.useFakeTimers()
     const loop = fakeLoop()
