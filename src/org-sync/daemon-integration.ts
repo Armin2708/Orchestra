@@ -17,6 +17,13 @@ export interface LocalSyncAgent {
   last_seen: string | null
 }
 
+export function listLocalPresenceAgents(db: Database.Database): LocalSyncAgent[] {
+  return db.prepare(`SELECT id, board_id, name, status, last_seen
+    FROM agents
+    WHERE status <> 'gone' AND org_sync_remote_origin IS NULL
+    ORDER BY board_id, name`).all() as LocalSyncAgent[]
+}
+
 export interface DaemonHubClient {
   get(path: string, query?: Record<string, string | number | boolean | undefined>, signal?: AbortSignal): Promise<unknown>
   postOp(op: string, payload: unknown, idempotencyKey?: string, signal?: AbortSignal): Promise<OpResult>

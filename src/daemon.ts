@@ -7,9 +7,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
+  listLocalPresenceAgents,
   startDaemonOrgSync,
   type DaemonOrgSyncHandle,
-  type LocalSyncAgent,
 } from './org-sync/daemon-integration.js'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
@@ -1010,8 +1010,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       home: orchestraDataDir,
       localDb: db,
       publishLocalChange: (event) => server.bus.emit('event', event),
-      listLocalAgents: () => db.prepare(`SELECT id, board_id, name, status, last_seen
-        FROM agents WHERE status <> 'gone' ORDER BY board_id, name`).all() as LocalSyncAgent[],
+      listLocalAgents: () => listLocalPresenceAgents(db),
       subscribeLocalChanges: (listener) => {
         server.bus.on('event', listener)
         return () => server.bus.off('event', listener)

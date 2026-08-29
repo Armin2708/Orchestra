@@ -238,11 +238,17 @@ export class LocalBoardState {
     const boardId = local?.board_id ?? this.#targetBoardId()
     local ??= this.#db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(boardId, name) as any
     if (!local) {
-      const inserted = this.#db.prepare(`INSERT INTO agents (board_id, name, status, last_seen)
-        VALUES (?, ?, ?, datetime('now'))`).run(boardId, name, status)
+      const inserted = this.#db.prepare(`INSERT INTO agents
+        (board_id, name, status, last_seen, org_sync_remote_origin)
+        VALUES (?, ?, ?, datetime('now'), ?)`).run(boardId, name, status, this.#orgId)
       local = this.#db.prepare(`SELECT * FROM agents WHERE id=?`).get(inserted.lastInsertRowid) as any
     } else if (hubAgentId) {
-      this.#db.prepare(`UPDATE agents SET status=?, last_seen=datetime('now') WHERE id=?`).run(status, local.id)
+      this.#db.prepare(`UPDATE agents SET status=?, last_seen=datetime('now'),
+        org_sync_remote_origin=? WHERE id=?`).run(status, this.#orgId, local.id)
+      local = this.#db.prepare(`SELECT * FROM agents WHERE id=?`).get(local.id) as any
+    } else {
+      this.#db.prepare('UPDATE agents SET org_sync_remote_origin=? WHERE id=?')
+        .run(this.#orgId, local.id)
       local = this.#db.prepare(`SELECT * FROM agents WHERE id=?`).get(local.id) as any
     }
     if (hubAgentId) {
@@ -273,6 +279,7 @@ export class LocalBoardState {
 }
 
 export function installLocalBoardSyncSchema(db: Database.Database): void {
+  try { db.exec('ALTER TABLE agents ADD COLUMN org_sync_remote_origin TEXT') } catch { /* exists */ }
   db.exec(`
     CREATE TABLE IF NOT EXISTS org_sync_card_mappings (
       id INTEGER PRIMARY KEY,

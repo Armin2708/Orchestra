@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  listLocalPresenceAgents,
   startDaemonOrgSync,
   type DaemonOrgSyncLoop,
   type LocalSyncAgent,
@@ -132,6 +133,52 @@ describe('daemon organization sync integration', () => {
       { agent_id: 'hub_alice', state: 'working', current_card_id: null, activity: 'working' },
       { agent_id: 'hub_bob', state: 'idle', current_card_id: null, activity: 'idle' },
     ])
+  })
+
+  it('does not heartbeat an agent mirrored from an inbound hub event', async () => {
+    const db = openDb(':memory:')
+    db.prepare(`INSERT INTO boards (project_path, name) VALUES ('/project', 'Project')`).run()
+    db.prepare(`INSERT INTO agents (board_id, name, status) VALUES (1, 'local-agent', 'idle')`).run()
+    const posts: Array<{ op: string; payload: any }> = []
+    const client = {
+      get: vi.fn(async () => ({ boards: [{ id: 'board_default', project_name: 'Default project' }] })),
+      postOp: vi.fn(async (op: string, payload: any) => {
+        posts.push({ op, payload })
+        return { result: op === 'agent.register' ? { id: `hub_${payload.name}` } : {}, seq: 0 }
+      }),
+      streamSince: vi.fn(),
+    }
+    const handle = await startDaemonOrgSync({
+      home: temporaryHome(),
+      loadCredential: async () => credential,
+      createClient: () => client,
+      createLoop: (options) => ({
+        ...fakeLoop(),
+        start: () => {
+          void options.applyEvent({
+            id: 'evt_remote_agent',
+            seq: 1,
+            kind: 'agent.registered',
+            payload: { id: 'agent_remote', name: 'remote-agent', state: 'working' },
+          })
+        },
+      }),
+      localDb: db,
+      listLocalAgents: () => listLocalPresenceAgents(db),
+      output: () => undefined,
+      heartbeatMs: 60_000,
+    })
+    await vi.waitFor(() => expect(posts.some((item) => item.op === 'agent.heartbeat')).toBe(true))
+    await handle?.stop()
+
+    expect(db.prepare(`SELECT name, org_sync_remote_origin FROM agents ORDER BY name`).all()).toEqual([
+      { name: 'local-agent', org_sync_remote_origin: null },
+      { name: 'remote-agent', org_sync_remote_origin: credential.orgId },
+    ])
+    expect(posts.filter((item) => item.op === 'agent.register').map((item) => item.payload.name))
+      .toEqual(['local-agent'])
+    expect(posts.filter((item) => item.op === 'agent.heartbeat')).toHaveLength(1)
+    db.close()
   })
 
   it('stops the loop and heartbeat timer cleanly', async () => {
