@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Orchestra broken arches — exact equal sections</title>
+  <desc id="desc">Three differently sized arches, each split into three mathematically equal arc sections, above a centered conductor podium.</desc>
+  <rect width="512" height="512" fill="#F7F6F3"/>
+  <defs>
+    <!-- 44° per outer section at centerline radius 196.5 -->
+    <path id="outer-section" d="M-80.54-199.345A215 215 0 0 1 80.54-199.345L66.68-165.039A178 178 0 0 0-66.68-165.039Z"/>
+    <!-- 40° per middle section at centerline radius 146.5 -->
+    <path id="middle-section" d="M-56.433-155.049A165 165 0 0 1 56.433-155.049L43.779-120.281A128 128 0 0 0-43.779-120.281Z"/>
+    <!-- 36° per inner section at centerline radius 97 -->
+    <path id="inner-section" d="M-35.846-110.323A116 116 0 0 1 35.846-110.323L24.103-74.182A78 78 0 0 0-24.103-74.182Z"/>
+  </defs>
+
+  <g fill="#A1A19B" transform="translate(256 330)">
+    <use href="#outer-section" transform="rotate(-54)"/>
+    <use href="#outer-section"/>
+    <use href="#outer-section" transform="rotate(54)"/>
+  </g>
+  <g fill="#62625D" transform="translate(256 352)">
+    <use href="#middle-section" transform="rotate(-50)"/>
+    <use href="#middle-section"/>
+    <use href="#middle-section" transform="rotate(50)"/>
+  </g>
+  <g fill="#111111" transform="translate(256 388)">
+    <use href="#inner-section" transform="rotate(-46)"/>
+    <use href="#inner-section"/>
+    <use href="#inner-section" transform="rotate(46)"/>
+  </g>
+
+  <path fill="#111111" d="M195 367H317V395H195Z"/>
+</svg>

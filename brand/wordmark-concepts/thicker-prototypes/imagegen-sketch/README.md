@@ -21,4 +21,9 @@ row to three equal 50-degree sections separated by equal 15-degree gaps.
 preferred v1 silhouette and changes only the internal split positions so the
 three pieces within each individual arch are equal-length; the three arches
 retain their different overall scales.
+`orchestra-broken-arches-v4-exact.svg` is the deterministic correction. Each
+arch defines one annular-section path and reuses it three times, making its
+three pieces mathematically identical in arc length. The outer, middle, and
+inner sections span 44°, 40°, and 36° respectively, preserving the visual
+scale progression between arches. Its PNG is rendered directly from that SVG.
 Production assets under `brand/identity/` remain unchanged.
