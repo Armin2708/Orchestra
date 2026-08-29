@@ -1008,6 +1008,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
     orgSync = await startDaemonOrgSync({
       home: orchestraDataDir,
+      localDb: db,
+      publishLocalChange: (event) => server.bus.emit('event', event),
       listLocalAgents: () => db.prepare(`SELECT id, board_id, name, status, last_seen
         FROM agents WHERE status <> 'gone' ORDER BY board_id, name`).all() as LocalSyncAgent[],
       subscribeLocalChanges: (listener) => {

@@ -1,10 +1,11 @@
-import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import type Database from 'better-sqlite3'
 import { agentActivity } from '../../web/src/agentActivity.js'
+import { openDb } from '../db.js'
 import { loadOrgCredential, type OrgCredential } from './credentials.js'
 import { HubClient, type HubSyncEvent, type OpResult } from './hub-client.js'
+import { LocalBoardState, type LocalBoardEvent } from './local-board-state.js'
 import { Outbox } from './outbox.js'
 import { SyncLoop, type SyncLoopOptions, type SyncState } from './sync-loop.js'
 
@@ -50,6 +51,9 @@ export interface StartDaemonOrgSyncOptions {
   createLoop?: (options: SyncLoopOptions) => DaemonOrgSyncLoop
   createOutbox?: (home: string) => Outbox
   applyEvent?: (event: HubSyncEvent) => void | Promise<void>
+  localDb?: Database.Database
+  publishLocalChange?: (event: LocalBoardEvent) => void
+  localBoardId?: number
   listLocalAgents?: () => LocalSyncAgent[]
   output?: (line: string) => void
   heartbeatMs?: number
@@ -79,15 +83,23 @@ export async function startDaemonOrgSync(
   let timer: ReturnType<typeof setInterval> | undefined
   let loop: DaemonOrgSyncLoop | undefined
   let unsubscribeLocalChanges: (() => void) | undefined
+  let ownedLocalDb: Database.Database | undefined
   try {
     const client = options.createClient?.(credential) ?? new HubClient(credential)
     const outbox = options.createOutbox?.(home) ?? new Outbox(home)
-    const mirror = options.applyEvent ? undefined : new OrgStateMirror(home)
+    const localDb = options.applyEvent ? undefined : options.localDb ?? (ownedLocalDb = openDb(path.join(home, 'orchestra.db')))
+    const localState = localDb ? new LocalBoardState({
+      db: localDb,
+      orgId: credential.orgId,
+      publish: options.publishLocalChange,
+      localBoardId: options.localBoardId,
+    }) : undefined
+    const applyEvent = options.applyEvent ?? ((event: HubSyncEvent) => localState!.apply(event))
     loop = options.createLoop?.({
       client,
       outbox,
       home,
-      applyEvent: options.applyEvent ?? ((event) => mirror!.apply(event)),
+      applyEvent,
       onStateChange: (state) => {
         if (state === 'offline') output(`org-sync offline (${credential.orgId}); local daemon remains available`)
       },
@@ -99,7 +111,7 @@ export async function startDaemonOrgSync(
       client,
       outbox,
       home,
-      applyEvent: options.applyEvent ?? ((event) => mirror!.apply(event)),
+      applyEvent,
       onStateChange: (state) => {
         if (state === 'offline') output(`org-sync offline (${credential.orgId}); local daemon remains available`)
       },
@@ -141,12 +153,15 @@ export async function startDaemonOrgSync(
         unsubscribeLocalChanges?.()
         unsubscribeLocalChanges = undefined
         await loop!.stop()
+        ownedLocalDb?.close()
+        ownedLocalDb = undefined
       },
     }
   } catch (error) {
     if (timer) clearInterval(timer)
     unsubscribeLocalChanges?.()
     await loop?.stop().catch(() => undefined)
+    ownedLocalDb?.close()
     output(`org-sync unavailable: ${safeError(error)}; local daemon remains available`)
     return null
   }
@@ -213,72 +228,6 @@ class HubBoardResolver {
   }
 }
 
-interface MirrorState {
-  version: 1
-  lastSeq: number
-  cards: Record<string, unknown>
-  agents: Record<string, unknown>
-  mail: Record<string, unknown>
-}
-
-class OrgStateMirror {
-  readonly #path: string
-  #state: MirrorState
-
-  constructor(home: string) {
-    this.#path = path.join(home, 'org-state.json')
-    this.#state = this.#load()
-  }
-
-  apply(event: HubSyncEvent): void {
-    if (event.seq <= this.#state.lastSeq) return
-    const next = structuredClone(this.#state)
-    const payload = event.payload
-    const id = entityIdOrNull(payload)
-    if (typeof event.kind === 'string' && event.kind.startsWith('card.') && id) next.cards[id] = payload
-    else if (event.kind === 'agent.registered' && id) next.agents[id] = payload
-    else if (event.kind === 'mail.sent' && id) next.mail[id] = payload
-    next.lastSeq = event.seq
-    this.#persist(next)
-    this.#state = next
-  }
-
-  #load(): MirrorState {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.#path, 'utf8')) as Partial<MirrorState>
-      if (parsed.version !== 1 || !Number.isInteger(parsed.lastSeq)
-        || !isRecord(parsed.cards) || !isRecord(parsed.agents) || !isRecord(parsed.mail)) {
-        throw new Error('invalid organization mirror')
-      }
-      return parsed as MirrorState
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      return { version: 1, lastSeq: 0, cards: {}, agents: {}, mail: {} }
-    }
-  }
-
-  #persist(state: MirrorState): void {
-    fs.mkdirSync(path.dirname(this.#path), { recursive: true, mode: 0o700 })
-    const temporary = path.join(path.dirname(this.#path), `.org-state.json.${process.pid}.${randomUUID()}.tmp`)
-    let descriptor: number | undefined
-    try {
-      descriptor = fs.openSync(temporary, 'wx', 0o600)
-      fs.writeFileSync(descriptor, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
-      fs.fsyncSync(descriptor)
-      fs.closeSync(descriptor)
-      descriptor = undefined
-      fs.renameSync(temporary, this.#path)
-      fs.chmodSync(this.#path, 0o600)
-    } catch (error) {
-      if (descriptor !== undefined) {
-        try { fs.closeSync(descriptor) } catch { /* retain original failure */ }
-      }
-      try { fs.rmSync(temporary, { force: true }) } catch { /* retain original failure */ }
-      throw error
-    }
-  }
-}
-
 const isBoardListing = (value: unknown): value is { id: string; project_name?: string } =>
   Boolean(value && typeof value === 'object' && typeof (value as any).id === 'string')
 
@@ -290,9 +239,6 @@ const entityId = (value: unknown, operation: string): string => {
 
 const entityIdOrNull = (value: unknown): string | null =>
   value && typeof value === 'object' && typeof (value as any).id === 'string' ? (value as any).id : null
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value && typeof value === 'object' && !Array.isArray(value))
 
 const safeError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : 'unknown sync failure'

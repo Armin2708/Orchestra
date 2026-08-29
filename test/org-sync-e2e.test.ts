@@ -3,8 +3,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
+import type Database from 'better-sqlite3'
+import type { FastifyInstance } from 'fastify'
 import { hubFixture, closeHubServers, type HubFixture } from './support/hub-fixture.js'
 import { mintDeviceToken } from '../src/hub/devices.js'
+import { openDb } from '../src/db.js'
+import { buildServer } from '../src/server.js'
 import { saveOrgCredential, type OrgCredential } from '../src/org-sync/credentials.js'
 import { HubClient, HubConflictError, type HubSyncEvent } from '../src/org-sync/hub-client.js'
 import {
@@ -15,9 +19,13 @@ import {
 
 const homes: string[] = []
 const handles: DaemonOrgSyncHandle[] = []
+const localServers: FastifyInstance[] = []
+const localDbs: Database.Database[] = []
 
 afterEach(async () => {
   await Promise.all(handles.splice(0).map((handle) => handle.stop()))
+  await Promise.all(localServers.splice(0).map((server) => server.close()))
+  for (const db of localDbs.splice(0)) db.close()
   await closeHubServers()
   for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
 })
@@ -64,7 +72,7 @@ async function pair(): Promise<Pair> {
 
 const startSimulatedDaemon = async (
   home: string,
-  applyEvent: (event: HubSyncEvent) => void | Promise<void>,
+  applyEvent?: (event: HubSyncEvent) => void | Promise<void>,
   extra: Partial<StartDaemonOrgSyncOptions> = {},
 ) => {
   const handle = await startDaemonOrgSync({
@@ -80,26 +88,39 @@ const startSimulatedDaemon = async (
 }
 
 describe('organization sync end to end', () => {
-  it('delivers a card created by one joined daemon to the other over live SSE', async () => {
+  it('applies a hosted card through the default path into the other daemon local board', async () => {
     const setup = await pair()
-    const seenA: HubSyncEvent[] = []
-    const seenB: HubSyncEvent[] = []
-    let publishLocalChange: ((change: unknown) => void) | undefined
-    await startSimulatedDaemon(setup.homeA, (event) => { seenA.push(event) }, {
-      subscribeLocalChanges: (listener) => { publishLocalChange = listener; return () => { publishLocalChange = undefined } },
-      mapLocalChange: (change: any, boardId) => ({
-        op: 'card.create', payload: { board_id: boardId, title: change.title },
-      }),
+    const db = openDb(path.join(setup.homeB, 'orchestra.db'))
+    localDbs.push(db)
+    const localBoardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/machine-b', 'Machine B')`).run().lastInsertRowid)
+    const localServer = buildServer(db)
+    localServers.push(localServer)
+    await startSimulatedDaemon(setup.homeB, undefined, {
+      localDb: db,
+      publishLocalChange: (event) => localServer.bus.emit('event', event),
     })
-    await startSimulatedDaemon(setup.homeB, (event) => { seenB.push(event) })
-    await waitUntil(() => setup.hub.broadcast.listenerCount(setup.hub.orgId) === 2)
+    await waitUntil(() => setup.hub.broadcast.listenerCount(setup.hub.orgId) === 1)
 
-    publishLocalChange?.({ title: 'Created on daemon A' })
-    await waitUntil(() => seenB.some((event: any) => event.payload?.title === 'Created on daemon A'))
+    await setup.clientA.postOp('card.create', {
+      board_id: setup.hub.boardId,
+      title: 'Created on daemon A',
+      description: 'Visible on the actual machine B board',
+      paths: ['src/shared.ts'],
+    })
+    await waitUntil(() => Boolean(db.prepare(`SELECT 1 FROM cards WHERE board_id=? AND title=?`)
+      .get(localBoardId, 'Created on daemon A')))
 
-    expect(seenA.filter((event) => event.kind === 'card.created')).toHaveLength(1)
-    expect(seenB.filter((event) => event.kind === 'card.created')).toHaveLength(1)
-    expect((seenB.find((event) => event.kind === 'card.created')!.payload as any).title).toBe('Created on daemon A')
+    const snapshot = await localServer.inject({
+      method: 'GET', url: `/api/v1/boards/${localBoardId}/snapshot`,
+    })
+    expect(snapshot.statusCode).toBe(200)
+    expect(snapshot.json().cards).toContainEqual(expect.objectContaining({
+      title: 'Created on daemon A',
+      description: 'Visible on the actual machine B board',
+      paths: ['src/shared.ts'],
+    }))
+    expect(fs.existsSync(path.join(setup.homeB, 'org-state.json'))).toBe(false)
   })
 
   it('allows exactly one claimant and gives the loser current state in a 409', async () => {
