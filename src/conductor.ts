@@ -24,6 +24,7 @@ import {
 import { loadSdkSessionTranscript } from './external-transcript.js'
 import { resolvePreferredClaudeExecutableV1 } from './readiness-doctor.js'
 import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
+import { silenceCanUseToolShadowWarning } from './sdk-warnings.js'
 import {
   issueManagedAgentLaunchBootstrap,
   MANAGED_AGENT_BOOTSTRAP_ENV,
@@ -947,6 +948,8 @@ export class Conductor {
     // prefer a newer PATH-installed Claude CLI over the SDK's bundled one, so the
     // model catalog (supportedModels) reflects the operator's current CLI
     const claudeExecutable = resolvePreferredClaudeExecutableV1()
+    // canUseTool below is wired in every mode on purpose; quiet the SDK's shadowed warning
+    silenceCanUseToolShadowWarning()
     const q = query({
       prompt: input.stream(),
       options: {
