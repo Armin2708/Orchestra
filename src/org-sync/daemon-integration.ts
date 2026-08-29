@@ -30,6 +30,12 @@ export interface DaemonOrgSyncLoop {
   start(): void
   stop(): Promise<void>
   state(): SyncState
+  flush?(): Promise<void>
+}
+
+export interface LocalHubOp {
+  op: string
+  payload: unknown
 }
 
 export interface DaemonOrgSyncHandle {
@@ -47,6 +53,11 @@ export interface StartDaemonOrgSyncOptions {
   listLocalAgents?: () => LocalSyncAgent[]
   output?: (line: string) => void
   heartbeatMs?: number
+  subscribeLocalChanges?: (listener: (change: unknown) => void) => () => void
+  mapLocalChange?: (
+    change: unknown,
+    hubBoardId: string,
+  ) => LocalHubOp | null | Promise<LocalHubOp | null>
 }
 
 /**
@@ -67,6 +78,7 @@ export async function startDaemonOrgSync(
 
   let timer: ReturnType<typeof setInterval> | undefined
   let loop: DaemonOrgSyncLoop | undefined
+  let unsubscribeLocalChanges: (() => void) | undefined
   try {
     const client = options.createClient?.(credential) ?? new HubClient(credential)
     const outbox = options.createOutbox?.(home) ?? new Outbox(home)
@@ -98,9 +110,23 @@ export async function startDaemonOrgSync(
     })
     loop.start()
 
-    const presence = new PresencePublisher(client, options.listLocalAgents ?? (() => []), output)
+    const board = new HubBoardResolver(client)
+    const presence = new PresencePublisher(client, board, options.listLocalAgents ?? (() => []), output)
+    if (options.subscribeLocalChanges && options.mapLocalChange) {
+      unsubscribeLocalChanges = options.subscribeLocalChanges((change) => {
+        void (async () => {
+          const operation = await options.mapLocalChange!(change, await board.id())
+          if (!operation) return
+          outbox.enqueue(operation.op, operation.payload)
+          await loop?.flush?.()
+        })().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
+      })
+    }
     void presence.tick()
-    timer = setInterval(() => { void presence.tick() }, options.heartbeatMs ?? 15_000)
+    timer = setInterval(() => {
+      void presence.tick()
+      void loop?.flush?.().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
+    }, options.heartbeatMs ?? 15_000)
     timer.unref()
     output(`org-sync on: ${credential.orgId} at ${credential.hubBaseUrl} as ${credential.deviceName}`)
 
@@ -112,11 +138,14 @@ export async function startDaemonOrgSync(
         stopped = true
         if (timer) clearInterval(timer)
         timer = undefined
+        unsubscribeLocalChanges?.()
+        unsubscribeLocalChanges = undefined
         await loop!.stop()
       },
     }
   } catch (error) {
     if (timer) clearInterval(timer)
+    unsubscribeLocalChanges?.()
     await loop?.stop().catch(() => undefined)
     output(`org-sync unavailable: ${safeError(error)}; local daemon remains available`)
     return null
@@ -125,11 +154,11 @@ export async function startDaemonOrgSync(
 
 class PresencePublisher {
   readonly #agentIds = new Map<string, string>()
-  #boardId?: string
   #running = false
 
   constructor(
     private readonly client: DaemonHubClient,
+    private readonly board: HubBoardResolver,
     private readonly listLocalAgents: () => LocalSyncAgent[],
     private readonly output: (line: string) => void,
   ) {}
@@ -138,7 +167,7 @@ class PresencePublisher {
     if (this.#running) return
     this.#running = true
     try {
-      const boardId = await this.#hubBoardId()
+      const boardId = await this.board.id()
       for (const agent of this.listLocalAgents()) {
         const activity = agentActivity(agent)
         if (activity === 'gone') continue
@@ -165,7 +194,14 @@ class PresencePublisher {
     }
   }
 
-  async #hubBoardId(): Promise<string> {
+}
+
+class HubBoardResolver {
+  #boardId?: string
+
+  constructor(private readonly client: DaemonHubClient) {}
+
+  async id(): Promise<string> {
     if (this.#boardId) return this.#boardId
     const response = await this.client.get('boards') as { boards?: unknown }
     if (!Array.isArray(response?.boards)) throw new Error('hub returned an invalid board listing')

@@ -22,6 +22,7 @@ const setup = (overrides: Parameters<typeof registerOrgCommands>[1] = {}) => {
     verifyCredential: async () => undefined,
     readToken: async () => valid.deviceToken,
     deviceName: () => 'workstation',
+    activate: async () => undefined,
     output: (line) => output.push(line),
     ...overrides,
   })
@@ -45,12 +46,14 @@ describe('org CLI', () => {
 
   it('verifies and saves a token read from stdin', async () => {
     const verifyCredential = vi.fn(async () => undefined)
-    const { output, run, saved } = setup({ verifyCredential })
+    const activate = vi.fn(async () => undefined)
+    const { output, run, saved } = setup({ verifyCredential, activate })
 
     await run('org', 'join', '--hub', `${valid.hubBaseUrl}/`, '--org', valid.orgId, '--token-stdin')
 
     expect(saved).toEqual([valid])
     expect(verifyCredential).toHaveBeenCalledWith(valid)
+    expect(activate).toHaveBeenCalledOnce()
     expect(output.join('\n')).toContain(`joined ${valid.orgId}`)
     expect(output.join('\n')).not.toContain(valid.deviceToken)
   })

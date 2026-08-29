@@ -16,6 +16,7 @@ export interface OrgCliDeps {
   readToken?: () => Promise<string>
   deviceName?: () => string
   output?: (line: string) => void
+  activate?: () => Promise<void>
 }
 
 const normalizedHubUrl = (raw: string): string => {
@@ -53,6 +54,16 @@ export async function verifyOrgCredential(credential: OrgCredential): Promise<vo
   throw new Error(`credential verification failed: hub returned HTTP ${response.status}`)
 }
 
+const activateOrgSync = async (): Promise<void> => {
+  const { ensureDaemon, stopDaemon, waitForDaemonExit } = await import('./daemon.js')
+  if (stopDaemon() && !(await waitForDaemonExit())) {
+    throw new Error('organization credential saved, but the existing daemon did not stop cleanly')
+  }
+  if (!(await ensureDaemon())) {
+    throw new Error('organization credential saved, but the daemon could not start; run `orchestra serve`')
+  }
+}
+
 export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): void {
   const load = deps.loadCredential ?? (() => loadOrgCredential())
   const save = deps.saveCredential ?? ((credential) => saveOrgCredential(credential))
@@ -61,6 +72,7 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
   const readToken = deps.readToken ?? tokenFromStdin
   const deviceName = deps.deviceName ?? os.hostname
   const output = deps.output ?? console.log
+  const activate = deps.activate ?? activateOrgSync
 
   const org = program.command('org').description('join or inspect a hosted Orchestra organization')
   org.command('join')
@@ -96,6 +108,7 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
       }
       await verify(credential)
       await save(credential)
+      await activate()
       output(`joined ${credential.orgId} at ${credential.hubBaseUrl} as ${credential.deviceName}`)
     })
 

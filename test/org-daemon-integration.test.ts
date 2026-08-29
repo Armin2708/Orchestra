@@ -8,6 +8,7 @@ import {
   type LocalSyncAgent,
 } from '../src/org-sync/daemon-integration.js'
 import type { OrgCredential } from '../src/org-sync/credentials.js'
+import { Outbox } from '../src/org-sync/outbox.js'
 
 const homes: string[] = []
 const temporaryHome = () => {
@@ -32,6 +33,7 @@ const fakeLoop = (): DaemonOrgSyncLoop => ({
   start: vi.fn(),
   stop: vi.fn(async () => undefined),
   state: vi.fn(() => 'live'),
+  flush: vi.fn(async () => undefined),
 })
 
 describe('daemon organization sync integration', () => {
@@ -154,5 +156,40 @@ describe('daemon organization sync integration', () => {
 
     expect(loop.stop).toHaveBeenCalledOnce()
     expect(client.postOp).toHaveBeenCalledTimes(callsAtStop)
+  })
+
+  it('durably enqueues a local change and wakes the live sender', async () => {
+    const home = temporaryHome()
+    const loop = fakeLoop()
+    const outbox = new Outbox(home)
+    let listener: ((change: unknown) => void) | undefined
+    const unsubscribe = vi.fn()
+    const client = {
+      get: vi.fn(async () => ({ boards: [{ id: 'board_default', project_name: 'Default project' }] })),
+      postOp: vi.fn(),
+      streamSince: vi.fn(),
+    }
+    const handle = await startDaemonOrgSync({
+      home,
+      loadCredential: async () => credential,
+      createClient: () => client,
+      createOutbox: () => outbox,
+      createLoop: () => loop,
+      output: () => undefined,
+      subscribeLocalChanges: (next) => { listener = next; return unsubscribe },
+      mapLocalChange: (_change, boardId) => ({
+        op: 'card.create', payload: { board_id: boardId, title: 'Local card' },
+      }),
+    })
+
+    listener?.({ type: 'card' })
+    await vi.waitFor(() => expect(outbox.size()).toBe(1))
+    await handle?.stop()
+
+    expect(outbox.pending()[0]).toMatchObject({
+      op: 'card.create', payload: { board_id: 'board_default', title: 'Local card' },
+    })
+    expect(loop.flush).toHaveBeenCalledOnce()
+    expect(unsubscribe).toHaveBeenCalledOnce()
   })
 })

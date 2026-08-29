@@ -59,6 +59,8 @@ export class SyncLoop {
   #running = false
   #controller?: AbortController
   #runPromise?: Promise<void>
+  #flushPromise?: Promise<void>
+  #flushRequested = false
 
   constructor(options: SyncLoopOptions) {
     this.#client = options.client
@@ -103,6 +105,24 @@ export class SyncLoop {
     return this.#state
   }
 
+  /** Flushes work enqueued after the SSE connection became live. Calls coalesce so a
+   * burst of local events still has exactly one FIFO sender. */
+  flush(): Promise<void> {
+    this.#flushRequested = true
+    if (this.#flushPromise) return this.#flushPromise
+    const flushing = (async () => {
+      do {
+        this.#flushRequested = false
+        await this.#flushOutbox()
+      } while (this.#flushRequested)
+    })()
+    const tracked = flushing.finally(() => {
+      if (this.#flushPromise === tracked) this.#flushPromise = undefined
+    })
+    this.#flushPromise = tracked
+    return tracked
+  }
+
   async #run(): Promise<void> {
     let cursor = this.#loadCursor()
     let failures = 0
@@ -112,7 +132,7 @@ export class SyncLoop {
       this.#setState('connecting')
       let receivedEvent = false
       try {
-        await this.#flushOutbox()
+        await this.flush()
         if (!this.#running) break
         this.#setState('live')
         await this.#client.streamSince(cursor, async (event) => {

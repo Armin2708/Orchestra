@@ -173,6 +173,25 @@ describe('SyncLoop', () => {
     expect(sent).toEqual(queued.map((item) => ({ op: item.op, key: item.idempotencyKey })))
   })
 
+  it('flushes an op enqueued after the stream is already live', async () => {
+    const home = temporaryHome()
+    const outbox = new Outbox(home)
+    const client = {
+      postOp: vi.fn(async () => ({ result: {}, seq: 1 })),
+      streamSince: vi.fn(async (_since: number, _onEvent: unknown, signal: AbortSignal) => untilAborted(signal)),
+    }
+    const loop = new SyncLoop({ client, outbox, home, applyEvent: vi.fn() })
+    loop.start()
+    await waitUntil(() => loop.state() === 'live')
+
+    outbox.enqueue('card.create', { title: 'created while live' })
+    await loop.flush()
+    await loop.stop()
+
+    expect(client.postOp).toHaveBeenCalledOnce()
+    expect(outbox.size()).toBe(0)
+  })
+
   it('surfaces and removes conflicts while continuing the queue', async () => {
     const home = temporaryHome()
     const outbox = new Outbox(home)
