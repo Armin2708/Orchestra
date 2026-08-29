@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { CreateOrganization, OrganizationList, useAuth, useOrganization } from '@clerk/react'
-import { Mark } from './App'
+import { OrchestraMark } from './BrandMark'
 import { ClerkAuthControls } from './ClerkAuthControls'
 import { HubBoard } from './HubBoard'
 import { BillingPage } from './BillingPage'
@@ -27,7 +27,7 @@ function HubShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="app hub-app">
       <header className="topbar">
-        <div className="brand"><Mark /><span className="brand-title">Orchestra</span></div>
+        <div className="brand"><OrchestraMark /><span className="brand-title">Orchestra</span></div>
         <div className="topbar-actions"><ClerkAuthControls /></div>
       </header>
       <main className="hub-app-body">{children}</main>
@@ -102,7 +102,7 @@ function HubSignedIn() {
   return (
     <div className="app hub-app">
       <header className="topbar">
-        <div className="brand"><Mark /><span className="brand-title">Orchestra</span></div>
+        <div className="brand"><OrchestraMark /><span className="brand-title">Orchestra</span></div>
         <div className="topbar-actions">
           <nav className="view-tabs" role="tablist" aria-label="Hub views">
             <button type="button" role="tab" className={tab === 'board' ? 'tab active' : 'tab'}
