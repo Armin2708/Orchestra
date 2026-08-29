@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { HubEvent } from '../hub/types.js'
 import type { OrgCredential } from './credentials.js'
 
 export interface OpResult {
@@ -6,10 +7,9 @@ export interface OpResult {
   seq: number
 }
 
-export type HubSyncEvent = {
-  seq: number
-  [key: string]: unknown
-}
+export type HubSyncEvent = Pick<HubEvent, 'seq'>
+  & Partial<Omit<HubEvent, 'seq'>>
+  & Record<string, unknown>
 
 export class HubRequestError extends Error {
   readonly retryable = false

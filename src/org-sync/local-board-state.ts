@@ -153,7 +153,8 @@ export class LocalBoardState {
 
   #projectCard(event: HubSyncEvent): LocalBoardEvent[] {
     const card = hubCard(event.payload)
-    const idempotencyKey = stringOrNull((event as Record<string, unknown>).idempotency_key)
+    // Echo suppression depends on the hub preserving HubEvent.idempotency_key on the wire.
+    const idempotencyKey = stringOrNull(event.idempotency_key)
     const mapping = this.#db.prepare(`SELECT local_card_id FROM org_sync_card_mappings
       WHERE org_id=? AND (hub_card_id=? OR (? IS NOT NULL AND outbound_idempotency_key=?))
       LIMIT 1`).get(this.#orgId, card.id, idempotencyKey, idempotencyKey) as
