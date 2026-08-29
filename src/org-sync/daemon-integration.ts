@@ -86,6 +86,7 @@ export async function startDaemonOrgSync(
   let unsubscribeLocalChanges: (() => void) | undefined
   let ownedLocalDb: Database.Database | undefined
   const sidecarController = new AbortController()
+  let terminal = false
   try {
     const client = options.createClient?.(credential) ?? new HubClient(credential)
     const outbox = options.createOutbox?.(home) ?? new Outbox(home)
@@ -98,14 +99,27 @@ export async function startDaemonOrgSync(
     }) : undefined
     const applyEvent = options.applyEvent ?? ((event: HubSyncEvent) => localState!.apply(event))
     localState?.reconcileOutbound(outbox.pending())
+    const onStateChange = (state: SyncState) => {
+      if (state === 'offline') {
+        output(`org-sync offline (${credential.orgId}); local daemon remains available`)
+        return
+      }
+      if (state !== 'auth-failed' && state !== 'terminal') return
+      terminal = true
+      if (timer) clearInterval(timer)
+      timer = undefined
+      sidecarController.abort()
+      const reason = state === 'auth-failed'
+        ? 'authorization failed; rejoin the organization with a valid device token'
+        : 'stopped after a non-retryable hub failure'
+      output(`org-sync ${state} (${credential.orgId}): ${reason}; local daemon remains available`)
+    }
     loop = options.createLoop?.({
       client,
       outbox,
       home,
       applyEvent,
-      onStateChange: (state) => {
-        if (state === 'offline') output(`org-sync offline (${credential.orgId}); local daemon remains available`)
-      },
+      onStateChange,
       onConflict: (error) => output(
         `org-sync conflict: shared card changed or was claimed by someone else; ask the current owner before retrying (${safeError(error)})`,
       ),
@@ -115,9 +129,7 @@ export async function startDaemonOrgSync(
       outbox,
       home,
       applyEvent,
-      onStateChange: (state) => {
-        if (state === 'offline') output(`org-sync offline (${credential.orgId}); local daemon remains available`)
-      },
+      onStateChange,
       onConflict: (error) => output(
         `org-sync conflict: shared card changed or was claimed by someone else; ask the current owner before retrying (${safeError(error)})`,
       ),
@@ -145,12 +157,14 @@ export async function startDaemonOrgSync(
         })().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
       })
     }
-    void presence.tick(sidecarController.signal)
-    timer = setInterval(() => {
+    if (!terminal) {
       void presence.tick(sidecarController.signal)
-      void loop?.flush?.().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
-    }, options.heartbeatMs ?? 15_000)
-    timer.unref()
+      timer = setInterval(() => {
+        void presence.tick(sidecarController.signal)
+        void loop?.flush?.().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
+      }, options.heartbeatMs ?? 15_000)
+      timer.unref()
+    }
     output(`org-sync on: ${credential.orgId} at ${credential.hubBaseUrl} as ${credential.deviceName}`)
 
     let stopped = false

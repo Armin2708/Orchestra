@@ -11,7 +11,7 @@ import {
 } from './hub-client.js'
 import { Outbox, type QueuedOp } from './outbox.js'
 
-export type SyncState = 'offline' | 'connecting' | 'live'
+export type SyncState = 'offline' | 'connecting' | 'live' | 'auth-failed' | 'terminal'
 
 export interface SyncClient {
   postOp(op: string, payload: unknown, idempotencyKey?: string, signal?: AbortSignal): Promise<OpResult>
@@ -89,7 +89,7 @@ export class SyncLoop {
       if (this.#runPromise === tracked) this.#runPromise = undefined
       this.#running = false
       this.#controller = undefined
-      this.#setState('offline')
+      if (this.#state !== 'auth-failed' && this.#state !== 'terminal') this.#setState('offline')
     })
     this.#runPromise = tracked
   }
@@ -150,8 +150,14 @@ export class SyncLoop {
         if (!this.#running || controller.signal.aborted || isAbortError(error)) break
         const failure = asError(error)
         this.#onError(failure)
-        if (failure instanceof HubRequestError && !(failure instanceof HubConflictError)) break
-        if (!(failure instanceof HubRetryableError)) break
+        if (failure instanceof HubRequestError && !(failure instanceof HubConflictError)) {
+          this.#setState(failure.status === 401 || failure.status === 403 ? 'auth-failed' : 'terminal')
+          break
+        }
+        if (!(failure instanceof HubRetryableError)) {
+          this.#setState('terminal')
+          break
+        }
         failures = receivedEvent ? 0 : failures
       }
       this.#setState('offline')

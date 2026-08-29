@@ -160,6 +160,42 @@ describe('daemon organization sync integration', () => {
     expect(client.postOp).toHaveBeenCalledTimes(callsAtStop)
   })
 
+  it('stops presence heartbeats when the sync loop reports terminal auth failure', async () => {
+    vi.useFakeTimers()
+    const output: string[] = []
+    let onStateChange: ((state: 'auth-failed') => void) | undefined
+    const loop = fakeLoop()
+    const client = {
+      get: vi.fn(async () => ({ boards: [{ id: 'board_default', project_name: 'Default project' }] })),
+      postOp: vi.fn(async (op: string) => ({ result: op === 'agent.register' ? { id: 'agent_1' } : {}, seq: 0 })),
+      streamSince: vi.fn(),
+    }
+    const handle = await startDaemonOrgSync({
+      home: temporaryHome(),
+      loadCredential: async () => credential,
+      createClient: () => client,
+      createLoop: (options) => {
+        onStateChange = options.onStateChange as typeof onStateChange
+        return loop
+      },
+      listLocalAgents: () => [{
+        id: 1, board_id: 1, name: 'alice', status: 'idle', last_seen: new Date().toISOString(),
+      }],
+      output: (line) => output.push(line),
+      heartbeatMs: 15_000,
+    })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(client.postOp).toHaveBeenCalled()
+
+    onStateChange?.('auth-failed')
+    const callsAtFailure = client.postOp.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(client.postOp).toHaveBeenCalledTimes(callsAtFailure)
+    expect(output.join('\n')).toContain('org-sync auth-failed')
+    await handle?.stop()
+  })
+
   it('durably enqueues a local change and wakes the live sender', async () => {
     const home = temporaryHome()
     const loop = fakeLoop()

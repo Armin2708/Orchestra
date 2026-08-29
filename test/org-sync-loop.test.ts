@@ -256,10 +256,14 @@ describe('SyncLoop', () => {
     const loop = new SyncLoop({ client, outbox: new Outbox(home), home, applyEvent: vi.fn(), sleep, onError: (error) => errors.push(error) })
 
     loop.start()
-    await waitUntil(() => errors.length === 1)
-    await loop.stop()
+    await waitUntil(() => loop.state() === 'auth-failed')
 
+    expect(errors).toHaveLength(1)
+    expect(loop.state()).toBe('auth-failed')
     expect(client.streamSince).toHaveBeenCalledOnce()
     expect(sleep).not.toHaveBeenCalled()
+    await loop.stop()
+
+    expect(loop.state()).toBe('offline')
   })
 })
