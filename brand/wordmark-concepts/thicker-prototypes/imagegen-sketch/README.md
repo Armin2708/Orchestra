@@ -30,4 +30,7 @@ scale progression between arches. Its PNG is rendered directly from that SVG.
 the operator-supplied raster as the exact visual target and uses built-in
 ImageGen to equalize the three pieces within each arch while preserving the
 reference's softer proportions and finish.
+`orchestra-broken-arches-v6-axis-aligned.png` adds a shared construction axis:
+all arches use one center and vertical symmetry line, equal angular sections,
+concentric curved edges, and gap boundaries aligned along common radial axes.
 Production assets under `brand/identity/` remain unchanged.
