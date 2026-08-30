@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">Orchestra app icon on black</title>
-  <desc id="desc">Twenty-one angular seats in three semicircular rows facing a centered conductor podium on a black background.</desc>
-  <rect width="512" height="512" fill="#000000"/>
+  <desc id="desc">Twenty-one angular seats in three semicircular rows facing a centered conductor podium on a rounded black background.</desc>
+  <rect width="512" height="512" rx="96" fill="#000000"/>
   <defs>
     <path id="seat" d="M-12-18H12L8 18H-8Z"/>
   </defs>
-  <g transform="translate(256 266) scale(.9)">
+  <g transform="translate(256 266) scale(1.08)">
     <g fill="#62625D">
       <use href="#seat" transform="translate(-188 34) rotate(-72) scale(1.05)"/>
       <use href="#seat" transform="translate(-156 -22) rotate(-57) scale(1.05)"/>

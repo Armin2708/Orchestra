@@ -9,7 +9,7 @@ The Orchestra mark is a top-down ensemble: exactly 21 angular seats in 9–7–5
 | `orchestra-mark.svg` | Primary mark on light or transparent surfaces |
 | `orchestra-mark-reversed.svg` | Primary mark on dark surfaces |
 | `orchestra-app-icon.svg` | Square app icon master on warm white |
-| `orchestra-app-icon-dark.svg` | Browser favicon master on black |
+| `orchestra-app-icon-dark.svg` | Enlarged browser favicon master on rounded black |
 
 Use the mark with the lowercase word `orchestra` set in Geist or the product's system sans at 600 weight. The wordmark is live type so it remains crisp, accessible, and consistent with the interface.
 
