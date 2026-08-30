@@ -71,7 +71,7 @@ describe('daemon organization sync integration', () => {
 
     expect(handle).not.toBeNull()
     expect(loop.start).toHaveBeenCalledOnce()
-    expect(output.join('\n')).toContain('org-sync on')
+    expect(output.join('\n')).toContain('org-sync · connecting')
     expect(output.join('\n')).toContain(credential.orgId)
     expect(output.join('\n')).not.toContain(credential.deviceToken)
     await handle?.stop()
@@ -262,8 +262,58 @@ describe('daemon organization sync integration', () => {
     await vi.advanceTimersByTimeAsync(60_000)
 
     expect(client.postOp).toHaveBeenCalledTimes(callsAtFailure)
-    expect(output.join('\n')).toContain('org-sync auth-failed')
+    expect(output.join('\n')).toContain('org-sync · stopped')
     await handle?.stop()
+  })
+
+  /**
+   * Reported verbatim from a real terminal: an unsubscribed org produced six lines for one
+   * fact — the hub's refusal printed twice, then three "outbound degraded: This operation
+   * was aborted" from the aborts our own shutdown had just caused.
+   */
+  it('reports a terminal failure once, with no abort spam after it', async () => {
+    vi.useFakeTimers()
+    const output: string[] = []
+    let onStateChange: ((state: string) => void) | undefined
+    let onError: ((error: unknown) => void) | undefined
+    const loop = fakeLoop()
+    const client = {
+      get: vi.fn(async () => ({ boards: [{ id: 'board_1' }] })),
+      postOp: vi.fn(async () => ({ result: {}, seq: 0 })),
+      streamSince: vi.fn(),
+    }
+    const refusal = Object.assign(
+      new Error('this org has no subscription — writes are disabled until one is started.'),
+      { retryable: false },
+    )
+
+    const handle = await startDaemonOrgSync({
+      home: temporaryHome(),
+      loadCredential: async () => credential,
+      createClient: () => client as never,
+      createLoop: (options) => {
+        onStateChange = options.onStateChange as typeof onStateChange
+        onError = options.onError as typeof onError
+        return loop
+      },
+      listLocalAgents: () => [],
+      output: (line) => output.push(line),
+      heartbeatMs: 15_000,
+    })
+
+    // exactly the sequence the daemon produced: a non-retryable refusal, then terminal
+    onError?.(refusal)
+    onStateChange?.('auth-failed')
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    const text = output.join('\n')
+    const mentions = output.filter((line) => line.includes('no subscription')).length
+    expect(mentions, `the refusal must be reported once, got:\n${text}`).toBe(1)
+    expect(text).toContain('org-sync · stopped')
+    expect(text).not.toMatch(/aborted/i)
+    expect(text.split('\n').length).toBeLessThanOrEqual(4)
+    await handle?.stop()
+    vi.useRealTimers()
   })
 
   it('durably enqueues a local change and wakes the live sender', async () => {

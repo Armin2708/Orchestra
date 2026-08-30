@@ -122,9 +122,28 @@ export async function startDaemonOrgSync(
     // The last thing the hub refused, so a terminal state can explain itself instead of
     // guessing. Set by onError below, which sees the error the state change does not.
     let lastError: string | undefined
+    // One line per distinct fact. The same refusal used to arrive twice — once as
+    // "degraded", once as the state change — and each carried its own copy of the same
+    // sentence, so the one thing worth reading was the hardest thing to find.
+    let saidLast: string | undefined
+    const say = (line: string) => {
+      if (line === saidLast) return
+      saidLast = line
+      output(line)
+    }
+    // An abort we caused by stopping the loop is not a failure worth reporting, and after
+    // the loop is terminal there is nothing left to say about outbound work.
+    const reportOutbound = (error: unknown) => {
+      if (terminal || sidecarController.signal.aborted || isAbortError(error)) return
+      say(`org-sync · outbound degraded: ${safeError(error)}`)
+    }
     const onStateChange = (state: SyncState) => {
+      if (state === 'live') {
+        say(`org-sync · live — ${credential.orgId} as ${credential.deviceName}`)
+        return
+      }
       if (state === 'offline') {
-        output(`org-sync offline (${credential.orgId}); local daemon remains available`)
+        say('org-sync · offline — retrying; the local board is unaffected')
         return
       }
       if (state !== 'auth-failed' && state !== 'terminal') return
@@ -139,7 +158,8 @@ export async function startDaemonOrgSync(
         ?? (state === 'auth-failed'
           ? 'authorization failed; rejoin the organization with a valid device token'
           : 'stopped after a non-retryable hub failure')
-      output(`org-sync ${state} (${credential.orgId}): ${reason}; local daemon remains available`)
+      say(`org-sync · stopped — ${reason}`)
+      say('org-sync · the local board is unaffected')
     }
     loop = options.createLoop?.({
       client,
@@ -152,7 +172,11 @@ export async function startDaemonOrgSync(
       ),
       onError: (error) => {
         lastError = safeError(error)
-        output(`org-sync degraded: ${lastError}; local daemon remains available`)
+        // A non-retryable failure is always followed by the terminal state, which explains
+        // it properly — printing it here too is the duplicate this replaces.
+        if ((error as { retryable?: boolean })?.retryable !== false) {
+          say(`org-sync · degraded: ${lastError}; retrying`)
+        }
       },
     }) ?? new SyncLoop({
       client,
@@ -165,7 +189,11 @@ export async function startDaemonOrgSync(
       ),
       onError: (error) => {
         lastError = safeError(error)
-        output(`org-sync degraded: ${lastError}; local daemon remains available`)
+        // A non-retryable failure is always followed by the terminal state, which explains
+        // it properly — printing it here too is the duplicate this replaces.
+        if ((error as { retryable?: boolean })?.retryable !== false) {
+          say(`org-sync · degraded: ${lastError}; retrying`)
+        }
       },
     })
     loop.start()
@@ -187,18 +215,18 @@ export async function startDaemonOrgSync(
             localState.recordOutboundEnqueued(operation.localCardId, queued.idempotencyKey)
           }
           await loop?.flush?.()
-        })().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
+        })().catch(reportOutbound)
       })
     }
     if (!terminal) {
       void presence.tick(sidecarController.signal)
       timer = setInterval(() => {
         void presence.tick(sidecarController.signal)
-        void loop?.flush?.().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
+        void loop?.flush?.().catch(reportOutbound)
       }, options.heartbeatMs ?? 15_000)
       timer.unref()
     }
-    output(`org-sync on: ${credential.orgId} at ${credential.hubBaseUrl} as ${credential.deviceName}`)
+    say(`org-sync · connecting to ${credential.orgId} at ${credential.hubBaseUrl}`)
 
     let stopped = false
     return {
