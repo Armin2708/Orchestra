@@ -472,14 +472,21 @@ describe('daemon organization sync integration', () => {
     } })
     await new Promise((resolve) => setImmediate(resolve))
 
-    expect(outbox.pending().map((item: any) => item.payload._local_card_id).sort()).toEqual([
+    // Each card is created exactly once no matter how often milestone changes re-emit
+    // it; the milestone itself syncs as its own single create. No card.update /
+    // card.milestone ops can exist yet — the creates' echoes never returned, so there
+    // is no hub id to address them to.
+    const cardCreates = outbox.pending().filter((item: any) => item.op === 'card.create')
+    expect(cardCreates.map((item: any) => item.payload._local_card_id).sort()).toEqual([
       first.id, second.id,
     ].sort())
+    expect(outbox.pending().filter((item: any) => item.op === 'milestone.create')).toHaveLength(1)
+    expect(outbox.pending()).toHaveLength(3)
     expect(db.prepare(`SELECT local_card_id, outbound_idempotency_key
       FROM org_sync_card_mappings WHERE org_id=? ORDER BY local_card_id`).all(credential.orgId))
       .toEqual([
-        { local_card_id: first.id, outbound_idempotency_key: outbox.pending()[0].idempotencyKey },
-        { local_card_id: second.id, outbound_idempotency_key: outbox.pending()[1].idempotencyKey },
+        { local_card_id: first.id, outbound_idempotency_key: cardCreates[0].idempotencyKey },
+        { local_card_id: second.id, outbound_idempotency_key: cardCreates[1].idempotencyKey },
       ])
 
     await handle?.stop()

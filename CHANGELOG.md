@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Org collaboration** — the hosted org board becomes a real shared
+  workspace: card moves, edits, claims, and milestone changes now sync
+  BOTH ways between every connected machine (optimistic versioning,
+  first-claim-wins, echo-suppressed); agents on different machines can
+  mail each other (`orchestra ask <agent>` on the org board — delivery
+  lands on the recipient's own board); shared milestones with per-card
+  linkage and a progress strip on the cloud board; presence now reports
+  which card an agent is working on. `orchestra org board` prints the
+  local board that mirrors the organization. Personal boards still never
+  sync (verified end-to-end).
+
 ## 0.1.1 — 2026-08-26
 
 - **`orchestra demo`** — seed a sample board (agents, overlap warning,

@@ -1148,12 +1148,12 @@
   },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 100,
+    "total_get_routes": 101,
     "by_classification": {
       "canonical": 70,
       "compatibility": 5,
       "legacy": 14,
-      "infrastructure": 11
+      "infrastructure": 12
     },
     "interpretation": "The count includes authenticated and intentionally public GET routes and is not an observe grant list. Any read-surface change requires explicit data/resource classification and REM-001 review."
   },

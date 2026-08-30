@@ -26,7 +26,7 @@ export const DEFAULT_SIGNATURE_RECEIPT_SCHEMA = path.join(DEFAULT_ROOT, 'docs/qu
 
 // These are intentionally independent of the JSON files. Changing a contract requires a reviewed
 // code change and new evasion tests, not a self-authorized JSON edit.
-export const PINNED_REQUIREMENTS_SHA256 = 'c163b4bbe53c894286a3366d22f0270aca707f4067caed6db52770b8be6b9376'
+export const PINNED_REQUIREMENTS_SHA256 = '62b008055d3b7b34bb6471641fa74774cc80d7bbecc4b5a502c21101e547c213'
 export const PINNED_MATRIX_SHA256 = '08290a23d95f315c33582a2addaa7b50df217742728f34266007b1d7b722f44f'
 export const PINNED_EVIDENCE_SCHEMA_SHA256 = '5735308109d34c5f72099c433c2329867f70075712cb0a08b0f97efea448ad06'
 export const PINNED_TOOL_EVIDENCE_SCHEMA_SHA256 = '4499d3b5aba26a7ab19e7a77f9744576338e1ffadc873fd649c01e8e3a954daa'

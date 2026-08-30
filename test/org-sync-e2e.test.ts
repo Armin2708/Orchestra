@@ -12,10 +12,12 @@ import { buildServer } from '../src/server.js'
 import { saveOrgCredential, type OrgCredential } from '../src/org-sync/credentials.js'
 import { HubClient, HubConflictError, type HubSyncEvent } from '../src/org-sync/hub-client.js'
 import {
+  listLocalPresenceAgents,
   startDaemonOrgSync,
   type DaemonOrgSyncHandle,
   type StartDaemonOrgSyncOptions,
 } from '../src/org-sync/daemon-integration.js'
+import { Outbox } from '../src/org-sync/outbox.js'
 
 const homes: string[] = []
 const handles: DaemonOrgSyncHandle[] = []
@@ -218,3 +220,177 @@ describe('organization sync end to end', () => {
     }
   })
 })
+
+describe('organization collaboration end to end', () => {
+  /** Two full daemons wired like production: REST server, bus, SQLite, presence.
+   * `seed` runs before the daemons start — the presence publisher ticks once at boot
+   * and then only on the (long, test-disabled) heartbeat, so an agent that should be
+   * announced must exist first, exactly like a real machine's agents at daemon boot. */
+  async function twoDaemons(seed?: (dbA: Database.Database, dbB: Database.Database) => void) {
+    const setup = await pair()
+    const dbA = openDb(path.join(setup.homeA, 'orchestra.db'))
+    const dbB = openDb(path.join(setup.homeB, 'orchestra.db'))
+    localDbs.push(dbA, dbB)
+    seed?.(dbA, dbB)
+    const serverA = buildServer(dbA)
+    const serverB = buildServer(dbB)
+    localServers.push(serverA, serverB)
+    const outboxA = new Outbox(setup.homeA)
+    const outboxB = new Outbox(setup.homeB)
+    for (const [home, db, server, outbox] of [
+      [setup.homeA, dbA, serverA, outboxA],
+      [setup.homeB, dbB, serverB, outboxB],
+    ] as const) {
+      await startSimulatedDaemon(home, undefined, {
+        localDb: db,
+        createOutbox: () => outbox,
+        publishLocalChange: (event) => server.bus.emit('event', event),
+        subscribeLocalChanges: (listener) => {
+          server.bus.on('event', listener)
+          return () => server.bus.off('event', listener)
+        },
+        listLocalAgents: () => listLocalPresenceAgents(db),
+      })
+    }
+    await waitUntil(() => setup.hub.broadcast.listenerCount(setup.hub.orgId) === 2)
+    const orgBoard = (db: Database.Database) => (db.prepare(`SELECT local_board_id AS id
+      FROM org_sync_boards WHERE org_id=?`).get(setup.hub.orgId) as { id: number }).id
+    return { setup, dbA, dbB, serverA, serverB, outboxA, outboxB,
+      orgBoardA: orgBoard(dbA), orgBoardB: orgBoard(dbB) }
+  }
+
+  const insertAgent = (db: Database.Database, boardId: number, name: string): number =>
+    Number(db.prepare(`INSERT INTO agents (board_id, name, status, last_seen)
+      VALUES (?, ?, 'active', datetime('now'))`).run(boardId, name).lastInsertRowid)
+
+  it('moves, edits, and claims round-trip between machines without echo storms', async () => {
+    const { setup, dbA, dbB, serverA, serverB, outboxA, outboxB, orgBoardA, orgBoardB }
+      = await twoDaemons()
+
+    const created = (await serverA.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: orgBoardA, title: 'Shared work', description: 'v1', paths: ['src/x.ts'],
+    } })).json().card
+    await waitUntil(() => Boolean(dbB.prepare(`SELECT 1 FROM cards WHERE title='Shared work'`).get()))
+    const onB = dbB.prepare(`SELECT * FROM cards WHERE title='Shared work'`).get() as any
+
+    // A moves it — B must see the move, not a second card.
+    await serverA.inject({ method: 'POST', url: `/api/v1/cards/${created.id}/move`,
+      payload: { column: 'in_progress' } })
+    await waitUntil(() => (dbB.prepare('SELECT column_name FROM cards WHERE id=?')
+      .get(onB.id) as any)?.column_name === 'in_progress')
+
+    // B edits the title — A must see the rename on the SAME local card.
+    await serverB.inject({ method: 'PATCH', url: `/api/v1/cards/${onB.id}`,
+      payload: { title: 'Shared work (renamed)' } })
+    await waitUntil(() => (dbA.prepare('SELECT title FROM cards WHERE id=?')
+      .get(created.id) as any)?.title === 'Shared work (renamed)')
+
+    // B's agent claims it — the claim must reach the hub and A.
+    insertAgent(dbB, orgBoardB, 'bob')
+    const assigned = await serverB.inject({ method: 'POST', url: `/api/v1/cards/${onB.id}/assign`,
+      payload: { agent: 'bob' } })
+    expect(assigned.statusCode).toBe(200)
+    await waitUntil(() => ownerName(dbA, created.id) === 'bob')
+    expect((await setup.hub.sql.query(
+      `SELECT owner_agent FROM cards WHERE org_id=$1`, [setup.hub.orgId])).rows)
+      .toEqual([{ owner_agent: 'bob' }])
+
+    // Quiescence: both outboxes drain and the hub version stops moving — the echo of
+    // each op must not breed another op.
+    await waitUntil(() => outboxA.size() === 0 && outboxB.size() === 0)
+    const versionNow = Number((await setup.hub.sql.query(
+      'SELECT version FROM cards WHERE org_id=$1', [setup.hub.orgId])).rows[0].version)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const versionLater = Number((await setup.hub.sql.query(
+      'SELECT version FROM cards WHERE org_id=$1', [setup.hub.orgId])).rows[0].version)
+    expect(versionLater).toBe(versionNow)
+    expect(Number((await setup.hub.sql.query(
+      'SELECT COUNT(*)::int AS count FROM cards WHERE org_id=$1', [setup.hub.orgId])).rows[0].count)).toBe(1)
+  }, 20_000)
+
+  it('delivers agent-to-agent mail across machines to the real recipient, once', async () => {
+    let personalBoardB = 0
+    let bobId = 0
+    const { setup, dbA, dbB, serverA, orgBoardA } = await twoDaemons((_dbA, seededB) => {
+      personalBoardB = Number(seededB.prepare(`INSERT INTO boards (project_path, name)
+        VALUES ('/machine-b', 'Machine B')`).run().lastInsertRowid)
+      bobId = insertAgent(seededB, personalBoardB, 'bob')
+    })
+    insertAgent(dbA, orgBoardA, 'alice')
+
+    // B's presence publishes bob; A projects the shadow it can address mail to.
+    await waitUntil(() => Boolean(dbA.prepare(`SELECT 1 FROM agents
+      WHERE name='bob' AND board_id=? AND org_sync_remote_origin IS NOT NULL`).get(orgBoardA)))
+
+    const sent = await serverA.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+      board_id: orgBoardA, from: 'alice', to: 'bob', body: 'can you review the login flow?',
+    } })
+    expect(sent.statusCode).toBe(200)
+
+    // The real bob — on his own personal board — receives it.
+    await waitUntil(() => Boolean(dbB.prepare(`SELECT 1 FROM messages
+      WHERE to_agent_id=? AND body='can you review the login flow?'`).get(bobId)))
+    const delivered = dbB.prepare(`SELECT * FROM messages
+      WHERE body='can you review the login flow?'`).all() as any[]
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0].board_id).toBe(personalBoardB)
+    expect(delivered[0].mail_type).toBe('organization_sync')
+
+    // The sender keeps exactly one copy — the echo from the hub must be recognized.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(dbA.prepare(`SELECT COUNT(*) AS count FROM messages
+      WHERE body='can you review the login flow?'`).get()).toEqual({ count: 1 })
+    expect(Number((await setup.hub.sql.query(
+      'SELECT COUNT(*)::int AS count FROM mail WHERE org_id=$1', [setup.hub.orgId])).rows[0].count)).toBe(1)
+  }, 20_000)
+
+  it('syncs milestones both ways and never leaks personal boards', async () => {
+    const { setup, dbA, dbB, serverA, orgBoardA, outboxA } = await twoDaemons()
+
+    const milestone = (await serverA.inject({ method: 'POST', url: '/api/v1/milestones',
+      payload: { board_id: orgBoardA, title: 'Launch', description: 'the big one' } })).json()
+    await waitUntil(() => Boolean(dbB.prepare(`SELECT 1 FROM milestones WHERE title='Launch'`).get()))
+
+    const card = (await serverA.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: orgBoardA, title: 'Launch step',
+    } })).json().card
+    await serverA.inject({ method: 'PATCH', url: `/api/v1/cards/${card.id}/milestone`,
+      payload: { milestone_id: milestone.id } })
+    await waitUntil(() => {
+      const onB = dbB.prepare(`SELECT milestone_id FROM cards WHERE title='Launch step'`).get() as any
+      if (!onB?.milestone_id) return false
+      const linked = dbB.prepare('SELECT title FROM milestones WHERE id=?').get(onB.milestone_id) as any
+      return linked?.title === 'Launch'
+    })
+
+    // Personal boards stay personal: a milestone and a message there must never sync.
+    const personalBoardA = Number(dbA.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/machine-a', 'Machine A')`).run().lastInsertRowid)
+    await serverA.inject({ method: 'POST', url: '/api/v1/milestones',
+      payload: { board_id: personalBoardA, title: 'Private plan' } })
+    insertAgent(dbA, personalBoardA, 'diary')
+    await serverA.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+      board_id: personalBoardA, from: 'diary', body: 'private note',
+    } })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(Number((await setup.hub.sql.query(
+      'SELECT COUNT(*)::int AS count FROM milestones WHERE org_id=$1', [setup.hub.orgId])).rows[0].count)).toBe(1)
+    expect(Number((await setup.hub.sql.query(
+      'SELECT COUNT(*)::int AS count FROM mail WHERE org_id=$1', [setup.hub.orgId])).rows[0].count)).toBe(0)
+    expect(dbB.prepare(`SELECT COUNT(*) AS count FROM milestones WHERE title='Private plan'`).get())
+      .toEqual({ count: 0 })
+
+    // Deleting the shared milestone detaches everywhere.
+    await serverA.inject({ method: 'DELETE', url: `/api/v1/milestones/${milestone.id}` })
+    await waitUntil(() => !dbB.prepare(`SELECT 1 FROM milestones WHERE title='Launch'`).get())
+    expect((dbB.prepare(`SELECT milestone_id FROM cards WHERE title='Launch step'`).get() as any)
+      .milestone_id).toBeNull()
+  }, 20_000)
+})
+
+const ownerName = (db: Database.Database, cardId: number): string | null => {
+  const row = db.prepare(`SELECT agent.name AS owner FROM cards card
+    LEFT JOIN agents agent ON agent.id=card.owner_agent_id WHERE card.id=?`).get(cardId) as
+    { owner: string | null } | undefined
+  return row?.owner ?? null
+}

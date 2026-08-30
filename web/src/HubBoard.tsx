@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { agentInk, agentWash, initials } from './api'
 import { agentActivity } from './agentActivity'
 import {
-  HubAgent, HubApiError, HubBoardSummary, HubCard, HubCardColumn,
-  createHubProject, listHubAgents, listHubBoards, listHubCards,
+  HubAgent, HubApiError, HubBoardSummary, HubCard, HubCardColumn, HubMilestone,
+  createHubProject, listHubAgents, listHubBoards, listHubCards, listHubMilestones,
 } from './hubApi'
 import { STATUS } from './Board'
 import './kanban.css'
@@ -31,16 +31,22 @@ const POLL_MS = 5000
 export function HubBoard({ orgId }: { orgId: string }) {
   const [cards, setCards] = useState<HubCard[] | null>(null)
   const [agents, setAgents] = useState<HubAgent[] | null>(null)
+  const [milestones, setMilestones] = useState<HubMilestone[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
       try {
-        const [nextCards, nextAgents] = await Promise.all([listHubCards(orgId), listHubAgents(orgId)])
+        const [nextCards, nextAgents, nextMilestones] = await Promise.all([
+          listHubCards(orgId), listHubAgents(orgId),
+          // An older hub without the milestones route must not blank the whole board.
+          listHubMilestones(orgId).catch(() => [] as HubMilestone[]),
+        ])
         if (cancelled) return
         setCards(nextCards)
         setAgents(nextAgents)
+        setMilestones(nextMilestones)
         setError(null)
       } catch (e) {
         if (cancelled) return
@@ -53,6 +59,8 @@ export function HubBoard({ orgId }: { orgId: string }) {
   }, [orgId])
 
   const agentByName = new Map((agents ?? []).map((a) => [a.name, a]))
+  const cardById = new Map((cards ?? []).map((c) => [c.id, c]))
+  const milestoneById = new Map(milestones.map((m) => [m.id, m]))
 
   if (error && cards === null) {
     return <div className="hub-board-error" role="alert">{error}</div>
@@ -65,6 +73,20 @@ export function HubBoard({ orgId }: { orgId: string }) {
     <div className="hub-board">
       <section className="kanban-board" aria-label="Org board">
         {error && <span className="kanban-error" role="alert">{error}</span>}
+        {milestones.filter((m) => m.status === 'open').length > 0 && (
+          <div className="hub-milestone-strip" aria-label="Milestones">
+            {milestones.filter((m) => m.status === 'open').map((m) => {
+              const steps = cards.filter((c) => c.milestone_id === m.id)
+              const done = steps.filter((c) => c.column === 'done').length
+              return (
+                <span key={m.id} className="hub-milestone-chip" title={m.description || m.title}>
+                  <strong>{m.title}</strong>
+                  <span className="hub-milestone-count">{done}/{steps.length}</span>
+                </span>
+              )
+            })}
+          </div>
+        )}
         <div className="kanban-lanes">
           {LANES.map((lane) => {
             const laneCards = cards.filter((c) => c.column === lane)
@@ -79,7 +101,9 @@ export function HubBoard({ orgId }: { orgId: string }) {
                 <div className="kanban-lane-body">
                   {laneCards.length === 0 && <p className="kanban-empty">No cards</p>}
                   {laneCards.map((card) => (
-                    <HubCardChip key={card.id} card={card} owner={card.owner_agent ? agentByName.get(card.owner_agent) ?? null : null} />
+                    <HubCardChip key={card.id} card={card}
+                      owner={card.owner_agent ? agentByName.get(card.owner_agent) ?? null : null}
+                      milestone={card.milestone_id ? milestoneById.get(card.milestone_id) ?? null : null} />
                   ))}
                 </div>
               </div>
@@ -94,7 +118,10 @@ export function HubBoard({ orgId }: { orgId: string }) {
           <h3>Agents</h3>
           {agents.length === 0 && <p className="hub-agent-empty">No agents connected yet.</p>}
           <ul>
-            {agents.map((a) => <HubAgentRow key={a.id} agent={a} />)}
+            {agents.map((a) => (
+              <HubAgentRow key={a.id} agent={a}
+                currentCard={a.current_card_id ? cardById.get(a.current_card_id) ?? null : null} />
+            ))}
           </ul>
         </section>
       </aside>
@@ -173,12 +200,15 @@ function HubBoardsPanel({ orgId }: { orgId: string }) {
   )
 }
 
-function HubCardChip({ card, owner }: { card: HubCard; owner: HubAgent | null }) {
+function HubCardChip({ card, owner, milestone }: {
+  card: HubCard; owner: HubAgent | null; milestone: HubMilestone | null
+}) {
   const ownerWorking = owner !== null && hubAgentActivity(owner) === 'working'
   return (
     <article className="kanban-card">
       <header>
         <span className="kanban-card-id">#{card.number}</span>
+        {milestone && <span className="hub-card-milestone" title={milestone.title}>{milestone.title}</span>}
       </header>
       <p className="kanban-card-title">{card.title}</p>
       <footer>
@@ -195,8 +225,11 @@ function HubCardChip({ card, owner }: { card: HubCard; owner: HubAgent | null })
   )
 }
 
-function HubAgentRow({ agent }: { agent: HubAgent }) {
+function HubAgentRow({ agent, currentCard }: { agent: HubAgent; currentCard: HubCard | null }) {
   const activity = hubAgentActivity(agent)
+  const doing = currentCard
+    ? `on #${currentCard.number} ${currentCard.title}`
+    : agent.activity || (agent.state === 'offline' ? 'offline' : 'idle')
   return (
     <li className="hub-agent-row">
       <span className={`avatar mini ${activity === 'idle' ? 'idle' : ''} ${activity === 'gone' ? 'offline' : ''}`}
@@ -206,7 +239,7 @@ function HubAgentRow({ agent }: { agent: HubAgent }) {
       </span>
       <div className="hub-agent-meta">
         <span className="hub-agent-name">{agent.name}</span>
-        <span className="hub-agent-activity">{agent.activity || (agent.state === 'offline' ? 'offline' : 'idle')}</span>
+        <span className="hub-agent-activity" title={doing}>{doing}</span>
       </div>
     </li>
   )

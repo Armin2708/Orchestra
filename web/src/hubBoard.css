@@ -114,3 +114,41 @@
   line-height: 1.45;
 }
 .hub-paywall .btn { flex: none; }
+
+/* Shared milestones: one strip above the lanes, open milestones only, done/total per chip. */
+.hub-milestone-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+.hub-milestone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 999px;
+  font-size: 0.85rem;
+  background: var(--wash, rgba(0, 0, 0, 0.04));
+  max-width: 100%;
+}
+.hub-milestone-chip strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hub-milestone-count {
+  color: var(--ink-soft, #666);
+  font-variant-numeric: tabular-nums;
+}
+.hub-card-milestone {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-soft, #666);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 9rem;
+}

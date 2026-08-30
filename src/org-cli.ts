@@ -31,6 +31,22 @@ export interface OrgCliDeps extends OrgConnectDeps {
   readToken?: () => Promise<string>
   deviceName?: () => string
   output?: (line: string) => void
+  orgBoardLookup?: (orgId: string) => Promise<{ boardId: number } | null>
+}
+
+/** Reads the daemon's SQLite directly (WAL allows a concurrent reader) — the lookup is
+ * local bookkeeping, not org data, so it must work even while the hub is unreachable. */
+async function defaultOrgBoardLookup(orgId: string): Promise<{ boardId: number } | null> {
+  const path = await import('node:path')
+  const { dataDir } = await import('./daemon.js')
+  const { openDb } = await import('./db.js')
+  let db
+  try { db = openDb(path.join(dataDir(), 'orchestra.db')) } catch { return null }
+  try {
+    const row = db.prepare(`SELECT local_board_id AS boardId FROM org_sync_boards WHERE org_id=?`)
+      .get(orgId) as { boardId: number } | undefined
+    return row ?? null
+  } catch { return null } finally { db.close() }
 }
 
 const normalizedHubUrl = (raw: string): string => {
@@ -317,6 +333,26 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
       output(`org: ${credential.orgId}`)
       output(`device: ${credential.deviceName}`)
       output(`credential: ${status}`)
+    })
+
+  org.command('board')
+    .description('show the local board that mirrors the organization (shared cards, teammates’ agents, org mail)')
+    .action(async () => {
+      const credential = await load()
+      if (!credential) {
+        output('not joined to a hosted organization')
+        return
+      }
+      const board = await (deps.orgBoardLookup ?? defaultOrgBoardLookup)(credential.orgId)
+      if (!board) {
+        output(`org: ${credential.orgId}`)
+        output('no local org board yet — it is created when the daemon first syncs; is the daemon running?')
+        return
+      }
+      output(`org: ${credential.orgId}`)
+      output(`local org board id: ${board.boardId}`)
+      output('cards created or claimed on this board are shared with the organization')
+      output(`message a teammate's agent: orchestra ask <agent> '<question>' on this board`)
     })
 
   org.command('leave')

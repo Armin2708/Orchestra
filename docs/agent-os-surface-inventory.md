@@ -19,12 +19,12 @@ is `test/agent-os-baseline-docs.test.ts`.
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
 | SQLite application tables | 170 | 3 | 12 | 17 | 202 |
-| Contract-scoped registered HTTP routes | 175 | 33 | 49 | 17 | 274 |
-| Contract-scoped CLI command families/subcommands | 94 | 5 | 30 | 32 | 161 |
+| Contract-scoped registered HTTP routes | 175 | 33 | 49 | 19 | 276 |
+| Contract-scoped CLI command families/subcommands | 94 | 5 | 30 | 41 | 170 |
 
 The hosted multi-org hub (`src/hub/`) is a separate Fastify server backed by its own Postgres
 database — a different process, different storage engine, and different tenancy model from the
-daemon this inventory otherwise covers. Its 5 HTTP routes and its `hub` CLI command are folded
+daemon this inventory otherwise covers. Its 6 HTTP routes and its `hub` CLI command are folded
 into the Infrastructure rows above because they share this daemon's `orchestra` binary and route
 extractor; its Postgres tables are **not** SQLite tables and cannot appear in the "SQLite
 application tables" row above by construction — they are documented separately in
@@ -224,6 +224,7 @@ table names above; they are prefixed `hub:` below to keep every name in this doc
 | `hub:boards` | `002-hub-work.sql` | board scope within a project |
 | `hub:cards` | `002-hub-work.sql` | hub card records, see `src/hub/cards.ts` |
 | `hub:mail` | `002-hub-work.sql` | agent-to-agent mail, see `src/hub/mail.ts` |
+| `hub:milestones` | `007-hub-milestones.sql` | shared milestones an org's boards rally around, see `src/hub/milestones.ts` |
 | `hub:agents` | `002-hub-work.sql` | named agent identity within a board |
 | `hub:org_events` | `003-hub-events.sql` | append-only per-org event stream consumed by `GET /api/v1/hub/orgs/:orgId/sync` |
 | `hub:org_event_seq` | `004-hub-event-seq.sql` | per-org monotonic sequence counter backing `org_events.seq` |
@@ -538,6 +539,7 @@ GET /api/v1/events
 GET /api/v1/hub/orgs/:orgId/agents
 GET /api/v1/hub/orgs/:orgId/cards
 GET /api/v1/hub/orgs/:orgId/mail/inbox
+GET /api/v1/hub/orgs/:orgId/milestones
 GET /api/v1/hub/orgs/:orgId/sync
 GET /api/v1/org
 GET /api/v1/push/status

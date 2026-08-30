@@ -21,13 +21,24 @@ export interface LocalSyncAgent {
   name: string
   status: string
   last_seen: string | null
+  /** The hub id of the org-board card this agent holds in_progress, when it holds one.
+   * Org cards are owned by the projected shadow of the agent (same name, remote
+   * origin set), so the join goes through the name, not this row's id. */
+  hub_current_card_id?: string | null
 }
 
 export function listLocalPresenceAgents(db: Database.Database): LocalSyncAgent[] {
-  return db.prepare(`SELECT id, board_id, name, status, last_seen
-    FROM agents
-    WHERE status <> 'gone' AND org_sync_remote_origin IS NULL
-    ORDER BY board_id, name`).all() as LocalSyncAgent[]
+  return db.prepare(`SELECT agent.id, agent.board_id, agent.name, agent.status, agent.last_seen,
+      (SELECT mapping.hub_card_id FROM cards card
+        JOIN agents holder ON holder.id=card.owner_agent_id AND holder.name=agent.name
+        JOIN org_sync_boards org_board ON org_board.local_board_id=card.board_id
+        JOIN org_sync_card_mappings mapping
+          ON mapping.local_card_id=card.id AND mapping.org_id=org_board.org_id
+        WHERE card.column_name='in_progress' AND mapping.hub_card_id IS NOT NULL
+        ORDER BY card.updated_at DESC LIMIT 1) AS hub_current_card_id
+    FROM agents agent
+    WHERE agent.status <> 'gone' AND agent.org_sync_remote_origin IS NULL
+    ORDER BY agent.board_id, agent.name`).all() as LocalSyncAgent[]
 }
 
 export interface DaemonHubClient {
@@ -51,6 +62,8 @@ export interface LocalHubOp {
   op: string
   payload: unknown
   localCardId?: number
+  localMessageId?: number
+  localMilestoneId?: number
 }
 
 export interface DaemonOrgSyncHandle {
@@ -77,7 +90,7 @@ export interface StartDaemonOrgSyncOptions {
   mapLocalChange?: (
     change: unknown,
     hubBoardId: string,
-  ) => LocalHubOp | null | Promise<LocalHubOp | null>
+  ) => LocalHubOp | LocalHubOp[] | null | Promise<LocalHubOp | LocalHubOp[] | null>
 }
 
 /**
@@ -208,15 +221,28 @@ export async function startDaemonOrgSync(
       unsubscribeLocalChanges = options.subscribeLocalChanges((change) => {
         void (async () => {
           localState?.reconcileOutbound(outbox.pending())
-          const operation = await mapLocalChange(change, await board.id(sidecarController.signal))
-          if (!operation) return
-          const queuedId = outbox.enqueue(operation.op, operation.payload)
-          if (operation.localCardId !== undefined && localState) {
-            const queued = outbox.pending().find((item) => item.id === queuedId)
-            if (!queued) throw new Error('organization sync could not read the operation it just queued')
-            localState.recordOutboundEnqueued(operation.localCardId, queued.idempotencyKey)
+          const mapped = await mapLocalChange(change, await board.id(sidecarController.signal))
+          const operations = Array.isArray(mapped) ? mapped : mapped ? [mapped] : []
+          for (const operation of operations) {
+            const queuedId = outbox.enqueue(operation.op, operation.payload)
+            // Creates and mail record their idempotency key so the hub's echo of this
+            // very operation is recognized instead of applied twice.
+            if (localState && (operation.localCardId !== undefined
+              || operation.localMessageId !== undefined || operation.localMilestoneId !== undefined)) {
+              const queued = outbox.pending().find((item) => item.id === queuedId)
+              if (!queued) throw new Error('organization sync could not read the operation it just queued')
+              if (operation.op === 'card.create' && operation.localCardId !== undefined) {
+                localState.recordOutboundEnqueued(operation.localCardId, queued.idempotencyKey)
+              }
+              if (operation.localMessageId !== undefined) {
+                localState.recordMailOutboundEnqueued(operation.localMessageId, queued.idempotencyKey)
+              }
+              if (operation.op === 'milestone.create' && operation.localMilestoneId !== undefined) {
+                localState.recordMilestoneOutboundEnqueued(operation.localMilestoneId, queued.idempotencyKey)
+              }
+            }
           }
-          await loop?.flush?.()
+          if (operations.length > 0) await loop?.flush?.()
         })().catch(reportOutbound)
       })
     }
@@ -289,7 +315,7 @@ class PresencePublisher {
         await this.client.postOp('agent.heartbeat', {
           agent_id: agentId,
           state: activity === 'working' ? 'working' : 'idle',
-          current_card_id: null,
+          current_card_id: agent.hub_current_card_id ?? null,
           activity,
         }, undefined, signal)
       }

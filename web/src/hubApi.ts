@@ -139,6 +139,19 @@ export interface HubCard {
   column: HubCardColumn
   owner_agent: string | null
   paths: string[]
+  milestone_id: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface HubMilestone {
+  id: string
+  org_id: string
+  board_id: string
+  title: string
+  description: string
+  status: 'open' | 'shipped' | 'dropped'
   version: number
   created_at: string
   updated_at: string
@@ -203,6 +216,11 @@ export async function listHubCards(orgId: string): Promise<HubCard[]> {
 export async function listHubAgents(orgId: string): Promise<HubAgent[]> {
   const body = await hubFetch('GET', `/orgs/${orgId}/agents`) as { agents: HubAgent[] }
   return body.agents
+}
+
+export async function listHubMilestones(orgId: string): Promise<HubMilestone[]> {
+  const body = await hubFetch('GET', `/orgs/${orgId}/milestones`) as { milestones: HubMilestone[] }
+  return body.milestones
 }
 
 export async function getHubEntitlements(orgId: string): Promise<HubEntitlements> {
