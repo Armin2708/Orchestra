@@ -64,6 +64,13 @@ function LocalOwnerApp() {
   // Which org this daemon mirrors, and on which local board — the project picker
   // separates cloud from local with this, never by name.
   const [orgInfo, setOrgInfo] = useState<{ joined: boolean; orgName: string | null; boardId: number | null } | null>(null)
+  useEffect(() => {
+    const loadOrg = () => api('GET', '/org').then(setOrgInfo).catch(() => setOrgInfo(null))
+    void loadOrg()
+    const t = setInterval(loadOrg, 30_000)
+    return () => clearInterval(t)
+  }, [])
+
   const [loaded, setLoaded] = useState(false)
   const [connectionState, setConnectionState] = useState<'live' | 'stale' | 'offline'>('offline')
   const hasConnectedRef = useRef(false)
@@ -345,13 +352,6 @@ function LocalOwnerApp() {
       beginLocalOwnerRetry(() => setLoaded(false), refresh)
     }} />
   }
-  useEffect(() => {
-    const loadOrg = () => api('GET', '/org').then(setOrgInfo).catch(() => setOrgInfo(null))
-    void loadOrg()
-    const t = setInterval(loadOrg, 30_000)
-    return () => clearInterval(t)
-  }, [])
-
   const cloudBoardId = orgInfo?.boardId ?? null
   const localSnaps = snaps.filter((s) => s.board.id !== cloudBoardId)
   const cloudSnaps = snaps.filter((s) => s.board.id === cloudBoardId)
