@@ -118,8 +118,12 @@ describe('organization sync end to end', () => {
     }
     await waitUntil(() => setup.hub.broadcast.listenerCount(setup.hub.orgId) === 2)
 
+    // Shared work happens on the org's own local board — a card on the personal
+    // /machine-a board must never reach the organization (asserted below).
+    const orgBoardA = (dbA.prepare(`SELECT local_board_id AS id FROM org_sync_boards
+      WHERE org_id=?`).get(setup.hub.orgId) as { id: number }).id
     const created = await serverA.inject({ method: 'POST', url: '/api/v1/cards', payload: {
-      board_id: boardA,
+      board_id: orgBoardA,
       title: 'Created on daemon A',
       description: 'Visible on the actual machine B board',
       paths: ['src/shared.ts'],
@@ -152,7 +156,8 @@ describe('organization sync end to end', () => {
     }))
     expect(dbB.prepare(`SELECT COUNT(*) AS count FROM cards
       WHERE board_id IN (?, ?)`).get(boardB, otherBoardB)).toEqual({ count: 0 })
-    expect(dbA.prepare('SELECT COUNT(*) AS count FROM cards WHERE board_id=?').get(boardA)).toEqual({ count: 1 })
+    expect(dbA.prepare('SELECT COUNT(*) AS count FROM cards WHERE board_id=?').get(boardA)).toEqual({ count: 0 })
+    expect(dbA.prepare('SELECT COUNT(*) AS count FROM cards WHERE board_id=?').get(orgBoardA)).toEqual({ count: 1 })
     expect((await setup.hub.sql.query('SELECT COUNT(*)::int AS count FROM cards WHERE org_id=$1', [setup.hub.orgId])).rows)
       .toEqual([{ count: 1 }])
     expect(fs.existsSync(path.join(setup.homeA, 'org-state.json'))).toBe(false)

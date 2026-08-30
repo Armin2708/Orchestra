@@ -103,6 +103,12 @@ export class LocalBoardState {
       FROM cards card LEFT JOIN agents agent ON agent.id=card.owner_agent_id
       WHERE card.id=?`).get(localCardId) as any
     if (!card) return null
+    // Only the organization's own local board is shared. The daemon subscribes to the
+    // whole event bus — every project board on the machine — and without this check a
+    // card created on any personal board was pushed to the org board teammates can see.
+    // Local boards are personal; the org board is the one deliberate exception. Fails
+    // closed: with no configured org board, nothing is shared.
+    if (this.#localBoardId === undefined || card.board_id !== this.#localBoardId) return null
     return {
       op: 'card.create',
       payload: {

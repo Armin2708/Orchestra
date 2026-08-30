@@ -362,13 +362,69 @@ describe('daemon organization sync integration', () => {
     db.close()
   })
 
+  /**
+   * The local/cloud split, enforced: personal boards are private, and only the org's own
+   * local board is shared. Before this, the daemon subscribed to the whole event bus and
+   * mapped ANY card event outbound — a card created on any personal project board on the
+   * machine was pushed to the shared org board every teammate can see.
+   */
+  it('never syncs a card from a personal board to the organization', async () => {
+    const home = temporaryHome()
+    const db = openDb(':memory:')
+    const server = buildServer(db)
+    await server.ready()
+    const personalBoard = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/personal-project', 'Personal')`).run().lastInsertRowid)
+    const loop = fakeLoop()
+    const outbox = new Outbox(home)
+    const client = {
+      get: vi.fn(async () => ({ boards: [{ id: 'board_default', project_name: 'Default project' }] })),
+      postOp: vi.fn(),
+      streamSince: vi.fn(),
+    }
+    const handle = await startDaemonOrgSync({
+      home,
+      loadCredential: async () => credential,
+      createClient: () => client,
+      createOutbox: () => outbox,
+      createLoop: () => loop,
+      localDb: db,
+      publishLocalChange: (event) => server.bus.emit('event', event),
+      subscribeLocalChanges: (listener) => {
+        server.bus.on('event', listener)
+        return () => server.bus.off('event', listener)
+      },
+      listLocalAgents: () => [],
+      output: () => undefined,
+      heartbeatMs: 60_000,
+    })
+    const orgBoard = (db.prepare(`SELECT local_board_id AS id FROM org_sync_boards
+      WHERE org_id=?`).get(credential.orgId) as { id: number }).id
+
+    await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: personalBoard, title: 'Private card — must stay private',
+    } })
+    const shared = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: orgBoard, title: 'Shared card',
+    } })).json().card
+    await vi.waitFor(() => expect(outbox.size()).toBe(1))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    // exactly one operation queued, and it is the org-board card
+    expect(outbox.size()).toBe(1)
+    expect(outbox.pending().map((item: any) => item.payload._local_card_id)).toEqual([shared.id])
+    expect(JSON.stringify(outbox.pending())).not.toContain('Private card')
+
+    await handle?.stop()
+    await server.close()
+    db.close()
+  })
+
   it('maps each local card once when milestone changes re-emit already-synced siblings', async () => {
     const home = temporaryHome()
     const db = openDb(':memory:')
     const server = buildServer(db)
     await server.ready()
-    const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
-      VALUES ('/project', 'Project')`).run().lastInsertRowid)
     const loop = fakeLoop()
     const outbox = new Outbox(home)
     const client = {
@@ -393,6 +449,10 @@ describe('daemon organization sync integration', () => {
       heartbeatMs: 60_000,
     })
 
+    // Cards shared with the org live on the org's own local board — the one
+    // startDaemonOrgSync just ensured. Personal boards no longer sync (see below).
+    const boardId = (db.prepare(`SELECT local_board_id AS id FROM org_sync_boards
+      WHERE org_id=?`).get(credential.orgId) as { id: number }).id
     const first = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
       board_id: boardId, title: 'First card',
     } })).json().card
