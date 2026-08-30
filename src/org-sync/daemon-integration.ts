@@ -27,7 +27,22 @@ export interface LocalSyncAgent {
   hub_current_card_id?: string | null
 }
 
+/** Only agents their operator explicitly SHARED reach the organization — presence is
+ * opt-in per agent, never an inventory of everything running on the machine. */
 export function listLocalPresenceAgents(db: Database.Database): LocalSyncAgent[] {
+  try {
+    return listWithHeldCard(db)
+  } catch {
+    // The org_sync_* tables appear when sync first installs its schema; before that
+    // (or on a database that never synced) the roster still answers — just without
+    // the held-card resolution, which needs those tables.
+    return db.prepare(`SELECT id, board_id, name, status, last_seen FROM agents
+      WHERE status <> 'gone' AND org_sync_remote_origin IS NULL AND org_sync_shared = 1
+      ORDER BY board_id, name`).all() as LocalSyncAgent[]
+  }
+}
+
+function listWithHeldCard(db: Database.Database): LocalSyncAgent[] {
   return db.prepare(`SELECT agent.id, agent.board_id, agent.name, agent.status, agent.last_seen,
       (SELECT mapping.hub_card_id FROM cards card
         JOIN agents holder ON holder.id=card.owner_agent_id AND holder.name=agent.name
@@ -38,6 +53,7 @@ export function listLocalPresenceAgents(db: Database.Database): LocalSyncAgent[]
         ORDER BY card.updated_at DESC LIMIT 1) AS hub_current_card_id
     FROM agents agent
     WHERE agent.status <> 'gone' AND agent.org_sync_remote_origin IS NULL
+      AND agent.org_sync_shared = 1
     ORDER BY agent.board_id, agent.name`).all() as LocalSyncAgent[]
 }
 

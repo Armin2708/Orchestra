@@ -150,7 +150,7 @@ export interface ServerOptions {
   pickNativeFolder?: () => Promise<{ path: string | null; cancelled: boolean }>
   /** The daemon's organization sync state, so `orchestra org connect` can wait for a real
    * connection instead of guessing with a timer. Absent outside the daemon. */
-  orgSyncStatus?: () => { joined: boolean; orgId: string | null; orgName?: string | null; state: string; detail?: string | null }
+  orgSyncStatus?: () => { joined: boolean; orgId: string | null; orgName?: string | null; boardId?: number | null; state: string; detail?: string | null }
 }
 
 // Native macOS choose-folder dialog for “+ Add project”. Runs on the daemon's own
@@ -371,7 +371,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
    * Deliberately says nothing about the credential itself — no hub URL, no device name, and
    * never the token: this reports liveness, and the CLI already holds the credential.
    */
-  server.get('/api/v1/org', async () => opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, state: 'off', detail: null })
+  server.get('/api/v1/org', async () => opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, boardId: null, state: 'off', detail: null })
 
   server.get('/health', async () => {
     const status = await operations.publicReadiness()
@@ -2423,6 +2423,27 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const { hook_token_hash: _h, ...safe } = updated
       emit(agent.board_id, 'agent', safe)
       return { ok: true, name }
+    })
+
+  // Cloud sharing is opt-in per agent (#319): flipping this is what makes an agent
+  // visible to the organization — presence publishes only shared agents. Unsharing
+  // stops the heartbeats; the hub's presence TTL fades the agent out on its own.
+  server.post<{ Params: { id: string }; Body: { shared?: boolean } | null }>(
+    '/api/v1/agents/:id/org-share', (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      const id = Number(req.params.id)
+      const shared = req.body?.shared
+      if (typeof shared !== 'boolean') return reply.code(400).send({ error: 'shared must be true or false' })
+      const agent = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+      if (!agent) return reply.code(404).send({ error: 'not found' })
+      if (agent.org_sync_remote_origin) {
+        return reply.code(400).send({ error: 'this agent belongs to another machine — only its own operator can share it' })
+      }
+      db.prepare(`UPDATE agents SET org_sync_shared=? WHERE id=?`).run(shared ? 1 : 0, id)
+      const updated = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+      const { hook_token_hash: _h2, ...safe2 } = updated
+      emit(agent.board_id, 'agent', safe2)
+      return { ok: true, shared }
     })
 
   // live-switch a hired agent's model — applies from the next turn (persisted for restart resume)

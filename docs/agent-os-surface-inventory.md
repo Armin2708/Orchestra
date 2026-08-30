@@ -19,7 +19,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
 | SQLite application tables | 170 | 3 | 12 | 17 | 202 |
-| Contract-scoped registered HTTP routes | 175 | 33 | 49 | 19 | 276 |
+| Contract-scoped registered HTTP routes | 175 | 33 | 50 | 19 | 277 |
 | Contract-scoped CLI command families/subcommands | 94 | 5 | 30 | 41 | 170 |
 
 The hosted multi-org hub (`src/hub/`) is a separate Fastify server backed by its own Postgres
@@ -454,6 +454,7 @@ POST /api/v1/agents/:id/permission-mode
 POST /api/v1/agents/:id/permissions/:requestId
 POST /api/v1/agents/:id/plugins/reload
 POST /api/v1/agents/:id/pulse
+POST /api/v1/agents/:id/org-share
 POST /api/v1/agents/:id/rename
 POST /api/v1/agents/:id/subping
 POST /api/v1/agents/:id/task

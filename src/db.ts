@@ -188,6 +188,12 @@ export function openDb(file: string): Database.Database {
   );
   `)
   try { db.exec(`ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'session'`) } catch { /* exists */ }
+  // Cloud sharing is opt-in per agent: nothing about a local agent reaches the
+  // organization until its operator flips this (POST /agents/:id/org-share).
+  try { db.exec(`ALTER TABLE agents ADD COLUMN org_sync_shared INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }
+  // Also installed by org-sync's own schema (idempotent) — here as well so a daemon
+  // that never synced can still answer presence/sharing queries that reference it.
+  try { db.exec(`ALTER TABLE agents ADD COLUMN org_sync_remote_origin TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE cards ADD COLUMN milestone_id INTEGER`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE cards ADD COLUMN step_order INTEGER`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN role TEXT`) } catch { /* exists */ }

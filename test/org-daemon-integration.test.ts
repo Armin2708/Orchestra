@@ -139,7 +139,7 @@ describe('daemon organization sync integration', () => {
   it('does not heartbeat an agent mirrored from an inbound hub event', async () => {
     const db = openDb(':memory:')
     db.prepare(`INSERT INTO boards (project_path, name) VALUES ('/project', 'Project')`).run()
-    db.prepare(`INSERT INTO agents (board_id, name, status) VALUES (1, 'local-agent', 'idle')`).run()
+    db.prepare(`INSERT INTO agents (board_id, name, status, org_sync_shared) VALUES (1, 'local-agent', 'idle', 1)`).run()
     const posts: Array<{ op: string; payload: any }> = []
     const client = {
       get: vi.fn(async () => ({ boards: [{ id: 'board_default', project_name: 'Default project' }] })),
@@ -185,8 +185,8 @@ describe('daemon organization sync integration', () => {
   it('backfills remote origin for an agent mirrored before the origin column existed', () => {
     const db = openDb(':memory:')
     db.prepare(`INSERT INTO boards (project_path, name) VALUES ('/project', 'Project')`).run()
-    const agentId = Number(db.prepare(`INSERT INTO agents (board_id, name, status)
-      VALUES (1, 'legacy-remote', 'idle')`).run().lastInsertRowid)
+    const agentId = Number(db.prepare(`INSERT INTO agents (board_id, name, status, org_sync_shared)
+      VALUES (1, 'legacy-remote', 'idle', 1)`).run().lastInsertRowid)
     db.exec(`CREATE TABLE org_sync_agent_mappings (
       org_id TEXT NOT NULL,
       hub_agent_id TEXT NOT NULL,

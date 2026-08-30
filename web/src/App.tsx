@@ -10,6 +10,7 @@ import {
   Snapshot,
   SystemInfo,
   Telemetry,
+  agentInk, agentWash, initials
 } from './api'
 import { BoardSection } from './BoardSection'
 import { OrchestraMark } from './BrandMark'
@@ -60,6 +61,9 @@ export function App({ authorityMode = 'local-owner', onAuthorityChanged }: {
 
 function LocalOwnerApp() {
   const [snaps, setSnaps] = useState<Snapshot[]>([])
+  // Which org this daemon mirrors, and on which local board — the project picker
+  // separates cloud from local with this, never by name.
+  const [orgInfo, setOrgInfo] = useState<{ joined: boolean; orgName: string | null; boardId: number | null } | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [connectionState, setConnectionState] = useState<'live' | 'stale' | 'offline'>('offline')
   const hasConnectedRef = useRef(false)
@@ -341,9 +345,20 @@ function LocalOwnerApp() {
       beginLocalOwnerRetry(() => setLoaded(false), refresh)
     }} />
   }
-  const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
-  const cards = snaps.flatMap((s) => s.cards)
-  const focusScope = resolveProjectFocus(snaps, focus)
+  useEffect(() => {
+    const loadOrg = () => api('GET', '/org').then(setOrgInfo).catch(() => setOrgInfo(null))
+    void loadOrg()
+    const t = setInterval(loadOrg, 30_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const cloudBoardId = orgInfo?.boardId ?? null
+  const localSnaps = snaps.filter((s) => s.board.id !== cloudBoardId)
+  const cloudSnaps = snaps.filter((s) => s.board.id === cloudBoardId)
+  const agents = localSnaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
+  const cards = localSnaps.flatMap((s) => s.cards)
+  // 'All projects' aggregates LOCAL work; the cloud board is its own place.
+  const focusScope = resolveProjectFocus(focus === 'all' ? localSnaps : snaps, focus)
   const shown = [...focusScope.snapshots]
 
   return (
@@ -360,7 +375,7 @@ function LocalOwnerApp() {
               <span className="brand-caret">▾</span>
             </button>
             <p className="sub">
-              {snaps.length} project{snaps.length === 1 ? '' : 's'} · {agents.length} agent{agents.length === 1 ? '' : 's'} active · {cards.length} card{cards.length === 1 ? '' : 's'}
+              {localSnaps.length} project{localSnaps.length === 1 ? '' : 's'} · {agents.length} agent{agents.length === 1 ? '' : 's'} active · {cards.length} card{cards.length === 1 ? '' : 's'}
             </p>
             {projectError && (
               <p className="brand-project-error" role="alert">
@@ -372,7 +387,7 @@ function LocalOwnerApp() {
             {menuOpen && (
               <div className="brand-menu">
                 <button className={focus === 'all' ? 'brand-item active' : 'brand-item'} onClick={() => pick('all')}>All projects</button>
-                {snaps.map((s) => (
+                {localSnaps.map((s) => (
                   <button key={s.board.id} className={focus === s.board.id ? 'brand-item active' : 'brand-item'}
                     onClick={() => pick(s.board.id)}>
                     {s.board.name}
@@ -389,6 +404,20 @@ function LocalOwnerApp() {
                     </span>
                   </button>
                 ))}
+                {cloudSnaps.length > 0 && (
+                  <>
+                    <p className="brand-menu-section">Cloud{orgInfo?.orgName ? ` — ${orgInfo.orgName}` : ''}</p>
+                    {cloudSnaps.map((s) => (
+                      <button key={s.board.id} className={focus === s.board.id ? 'brand-item active' : 'brand-item'}
+                        onClick={() => pick(s.board.id)}>
+                        <span className="brand-item-cloud" aria-hidden="true">☁</span> {s.board.name}
+                        <span className="brand-item-end">
+                          <span className="brand-count">{s.agents.filter((a) => a.status !== 'gone').length}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </>
+                )}
                 {addingProject ? (
                   <div className="brand-add-picker">
                     <div className="brand-add-path" title={picker?.path ?? ''}>{picker?.path ?? 'Loading…'}</div>
@@ -439,10 +468,15 @@ function LocalOwnerApp() {
             ? connectionState === 'offline'
               ? <StateMessage kind="offline" detail="The daemon could not be reached. Start Orchestra and retry; no empty project state is being inferred." />
               : <GettingStarted onSettings={() => pickView('settings')} />
-            : <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && focusScope.kind === 'project'}
+            : <>
+              {focus === cloudBoardId && cloudBoardId !== null && (
+                <CloudAgentsPanel localSnaps={localSnaps} onChange={refresh} orgName={orgInfo?.orgName ?? null} />
+              )}
+              <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && focusScope.kind === 'project'}
                 openMessages={shown.reduce((sum, snapshot) => sum
                   + snapshot.threads.filter((thread) => needsAttention(thread, snapshot.board.id, inboxRead)).length, 0)}
                 onTabChange={pickBoardTab} onChange={refresh} />
+              </>
         : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
             <SettingsView />
           </React.Suspense>}
@@ -715,6 +749,56 @@ function CloudStatus() {
       <i className="cloud-dot" aria-hidden="true" />
       {label}
     </span>
+  )
+}
+
+/**
+ * Pick and choose which of this machine's agents the organization can see. Nothing
+ * is shared by default: an agent reaches the cloud only when its operator adds it
+ * here, and removing it stops the heartbeats (the hub fades it out on its own).
+ * Shared agents keep working locally exactly as before — sharing adds visibility,
+ * it never moves them.
+ */
+function CloudAgentsPanel({ localSnaps, orgName, onChange }: {
+  localSnaps: Snapshot[]
+  orgName: string | null
+  onChange: () => void
+}) {
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const [error, setError] = useState('')
+  const candidates = localSnaps.flatMap((s) =>
+    s.agents.filter((a: any) => a.status !== 'gone' && !a.org_sync_remote_origin)
+      .map((a) => ({ agent: a as any, board: s.board })))
+  if (candidates.length === 0) return null
+  const toggle = async (id: number, shared: boolean) => {
+    setBusyId(id); setError('')
+    try {
+      await api('POST', `/agents/${id}/org-share`, { shared })
+      onChange()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'could not update sharing')
+    } finally { setBusyId(null) }
+  }
+  return (
+    <section className="cloud-agents" aria-label="Agents shared with the organization">
+      <h3>Your agents on the cloud{orgName ? ` — ${orgName}` : ''}</h3>
+      <p className="cloud-agents-hint">Sharing is per agent and off by default. A shared agent shows up for the whole organization and keeps working on its local project.</p>
+      <ul>
+        {candidates.map(({ agent, board }) => (
+          <li key={agent.id} className="cloud-agents-row">
+            <span className="avatar mini" style={{ background: agentWash(agent.name), color: agentInk(agent.name) }}>{initials(agent.name)}</span>
+            <span className="cloud-agents-name">{agent.name}</span>
+            <span className="cloud-agents-board">{board.name}</span>
+            <button type="button" className={agent.org_sync_shared ? 'btn' : 'btn primary'}
+              disabled={busyId === agent.id}
+              onClick={() => void toggle(agent.id, !agent.org_sync_shared)}>
+              {agent.org_sync_shared ? 'Remove from cloud' : 'Add to cloud'}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="billing-error" role="alert">{error}</p>}
+    </section>
   )
 }
 

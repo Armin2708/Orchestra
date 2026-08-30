@@ -723,13 +723,26 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     }, {
       // Read lazily: `orgSync` is assigned after listen(), and the supervisor replaces its
       // loop over the daemon's lifetime, so this must never capture a snapshot.
-      orgSyncStatus: () => ({
-        joined: orgSync?.orgId() != null,
-        orgId: orgSync?.orgId() ?? null,
-        orgName: orgSync?.orgName() ?? null,
-        state: orgSync?.state() ?? 'off',
-        detail: orgSync?.detail() ?? null,
-      }),
+      orgSyncStatus: () => {
+        const orgId = orgSync?.orgId() ?? null
+        // The board that mirrors the organization on THIS machine, so the UI can
+        // separate cloud from local projects without guessing by name.
+        let board: { id: number } | undefined
+        // The table appears when sync first runs; a joined-but-never-synced daemon
+        // must still answer /org rather than 500 on the missing table.
+        try {
+          board = orgId ? db.prepare(`SELECT local_board_id AS id FROM org_sync_boards
+            WHERE org_id=?`).get(orgId) as { id: number } | undefined : undefined
+        } catch { board = undefined }
+        return {
+          joined: orgId != null,
+          orgId,
+          orgName: orgSync?.orgName() ?? null,
+          boardId: board?.id ?? null,
+          state: orgSync?.state() ?? 'off',
+          detail: orgSync?.detail() ?? null,
+        }
+      },
       token,
       agentToken,
       localOwnerAuth,

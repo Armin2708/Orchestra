@@ -262,9 +262,11 @@ describe('organization collaboration end to end', () => {
       orgBoardA: orgBoard(dbA), orgBoardB: orgBoard(dbB) }
   }
 
+  // Sharing is opt-in (#319): these tests model an operator who has already added
+  // the agent to the cloud, so the rows are inserted shared.
   const insertAgent = (db: Database.Database, boardId: number, name: string): number =>
-    Number(db.prepare(`INSERT INTO agents (board_id, name, status, last_seen)
-      VALUES (?, ?, 'active', datetime('now'))`).run(boardId, name).lastInsertRowid)
+    Number(db.prepare(`INSERT INTO agents (board_id, name, status, last_seen, org_sync_shared)
+      VALUES (?, ?, 'active', datetime('now'), 1)`).run(boardId, name).lastInsertRowid)
 
   it('moves, edits, and claims round-trip between machines without echo storms', async () => {
     const { setup, dbA, dbB, serverA, serverB, outboxA, outboxB, orgBoardA, orgBoardB }
