@@ -341,7 +341,10 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
       } else if (!daemon.joined) {
         output('sync: daemon is running but has not picked up this credential yet')
       } else {
-        const detail = (daemon as { detail?: string | null }).detail
+        // `detail` is the LAST hub refusal and survives recovery — next to a healthy
+        // state it reads as a live problem, so it only accompanies a stopped one.
+        const stopped = daemon.state === 'auth-failed' || daemon.state === 'terminal'
+        const detail = stopped ? (daemon as { detail?: string | null }).detail : null
         output(`sync: ${daemon.state}${detail ? ` — ${detail}` : ''}`)
       }
     })
