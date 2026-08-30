@@ -6,11 +6,8 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import {
-  listLocalPresenceAgents,
-  startDaemonOrgSync,
-  type DaemonOrgSyncHandle,
-} from './org-sync/daemon-integration.js'
+import { listLocalPresenceAgents } from './org-sync/daemon-integration.js'
+import { superviseDaemonOrgSync, type DaemonOrgSyncSupervisor } from './org-sync/supervisor.js'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
 import { reap, bounceDeadLetters } from './reaper.js'
@@ -471,7 +468,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let vapidKeys: VapidKeys | undefined
   let vapidCredentialReason = 'vapid_credentials_not_checked'
   let runtimeReconciled = false
-  let orgSync: DaemonOrgSyncHandle | null = null
+  let orgSync: DaemonOrgSyncSupervisor | null = null
   const safeShutdown = new SafeShutdownCoordinator()
   const trackedActiveWork = new Map<string, () => void>()
   const reconcileActiveWork = () => {
@@ -1006,7 +1003,9 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     runtimeReconciled = true
     reconcileActiveWork()
     await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
-    orgSync = await startDaemonOrgSync({
+    // Supervised, not started once: `orchestra org join` runs in a different process, so
+    // the daemon watches the credential and connects without needing a restart.
+    orgSync = await superviseDaemonOrgSync({
       home: orchestraDataDir,
       localDb: db,
       publishLocalChange: (event) => server.bus.emit('event', event),
