@@ -717,6 +717,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         joined: orgSync?.orgId() != null,
         orgId: orgSync?.orgId() ?? null,
         state: orgSync?.state() ?? 'off',
+        detail: orgSync?.detail() ?? null,
       }),
       token,
       agentToken,

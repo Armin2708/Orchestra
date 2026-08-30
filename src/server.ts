@@ -150,7 +150,7 @@ export interface ServerOptions {
   pickNativeFolder?: () => Promise<{ path: string | null; cancelled: boolean }>
   /** The daemon's organization sync state, so `orchestra org connect` can wait for a real
    * connection instead of guessing with a timer. Absent outside the daemon. */
-  orgSyncStatus?: () => { joined: boolean; orgId: string | null; state: string }
+  orgSyncStatus?: () => { joined: boolean; orgId: string | null; state: string; detail?: string | null }
 }
 
 // Native macOS choose-folder dialog for “+ Add project”. Runs on the daemon's own
@@ -371,7 +371,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
    * Deliberately says nothing about the credential itself — no hub URL, no device name, and
    * never the token: this reports liveness, and the CLI already holds the credential.
    */
-  server.get('/api/v1/org', async () => opts.orgSyncStatus?.() ?? { joined: false, orgId: null, state: 'off' })
+  server.get('/api/v1/org', async () => opts.orgSyncStatus?.() ?? { joined: false, orgId: null, state: 'off', detail: null })
 
   server.get('/health', async () => {
     const status = await operations.publicReadiness()

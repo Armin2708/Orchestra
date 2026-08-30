@@ -55,6 +55,8 @@ export interface LocalHubOp {
 
 export interface DaemonOrgSyncHandle {
   state(): SyncState
+  /** The last thing the hub refused, so a caller can explain a state rather than restate it. */
+  detail(): string | null
   stop(): Promise<void>
 }
 
@@ -231,6 +233,7 @@ export async function startDaemonOrgSync(
     let stopped = false
     return {
       state: () => loop!.state(),
+      detail: () => lastError ?? null,
       stop: async () => {
         if (stopped) return
         stopped = true

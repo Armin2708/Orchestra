@@ -25,6 +25,8 @@ export interface DaemonOrgSyncSupervisor {
   state(): SupervisedSyncState
   /** The joined organization, or null. */
   orgId(): string | null
+  /** Why sync is in its current state, when the hub gave a reason. */
+  detail(): string | null
   /** Re-read the credential and start, stop, or switch the sync loop to match it. */
   reload(): Promise<void>
   stop(): Promise<void>
@@ -160,6 +162,7 @@ export async function superviseDaemonOrgSync(
   return {
     state: () => handle?.state() ?? 'off',
     orgId: () => currentOrgId,
+    detail: () => handle?.detail() ?? null,
     reload,
     stop: async () => {
       stopped = true

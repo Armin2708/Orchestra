@@ -27,6 +27,7 @@ import { registerOrgCommands } from './org-cli.js'
 import { registerLoginCommands, performLogin, cloudHubUrl, cloudWebUrl } from './login-cli.js'
 import { connectOrg, defaultConnectOrgDeps } from './org-cli.js'
 import { confirmAtTerminal, machineName, offerCloudSignIn } from './cloud-splash.js'
+import { awaitOrgSync, type OrgSyncSnapshot } from './terminal-status.js'
 import {
   createCentralFirstRunDemoLaunchGate,
 } from './first-run-central-integration.js'
@@ -1007,6 +1008,13 @@ if (process.argv.length <= 2) {
     if (running) return
     await serve({})
     console.log(`orchestra on ${baseUrl()}`)
+    // The sync loop settles after serve() returns, so without waiting here its verdict
+    // lands after the CLI's last line — which is how a subscription refusal ended up
+    // buried. Spin until it decides, then say which way it went.
+    await awaitOrgSync(async () => {
+      const response = await fetch(`${baseUrl()}/api/v1/org`, { signal: AbortSignal.timeout(1_000) })
+      return response.ok ? await response.json() as OrgSyncSnapshot : null
+    }).catch(() => null)
   }).catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
 } else {
   program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
