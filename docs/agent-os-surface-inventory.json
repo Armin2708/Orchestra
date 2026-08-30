@@ -1021,7 +1021,7 @@
       "id": "primary.graph-board",
       "classification": "legacy",
       "file": "web/src/App.tsx",
-      "evidence": "<BoardSection tab={boardTab}"
+      "evidence": "<BoardSection"
     },
     {
       "id": "primary.roadmap",

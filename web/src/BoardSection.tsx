@@ -101,13 +101,16 @@ type Props = {
   openMessages: number
   onTabChange: (tab: BoardTab) => void
   onChange: () => void
+  /** The cloud-agent sharing pane; present only while the cloud project is focused,
+   * which is also what makes the 'Cloud agents' tab appear at all. */
+  cloudPanel?: React.ReactNode
 }
 
-export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, onChange }: Props) {
+export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, onChange, cloudPanel }: Props) {
   return (
     <section className={`board-section board-section-${tab}`}>
       <nav className="board-section-tabs" aria-label="Board views" role="tablist">
-        {BOARD_TABS.map((item) => (
+        {BOARD_TABS.filter((item) => item.id !== 'cloud' || cloudPanel !== undefined).map((item) => (
           <button key={item.id} id={`board-tab-${item.id}`} type="button" role="tab"
             className={tab === item.id ? 'board-section-tab active' : 'board-section-tab'}
             aria-selected={tab === item.id} aria-controls="board-section-panel"
@@ -120,7 +123,9 @@ export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, o
 
       <div className="board-section-panel" id="board-section-panel" role="tabpanel"
         aria-labelledby={`board-tab-${tab}`}>
-        {tab === 'overview'
+        {tab === 'cloud'
+          ? cloudPanel ?? <ProjectGrid snaps={snaps} focused={focused} onChange={onChange} />
+        : tab === 'overview'
           ? <ProjectGrid snaps={snaps} focused={focused} onChange={onChange} />
           : tab === 'kanban'
             ? <BacklogPanel snaps={snaps} focused={focused} onChange={onChange} />

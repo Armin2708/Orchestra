@@ -468,15 +468,15 @@ function LocalOwnerApp() {
             ? connectionState === 'offline'
               ? <StateMessage kind="offline" detail="The daemon could not be reached. Start Orchestra and retry; no empty project state is being inferred." />
               : <GettingStarted onSettings={() => pickView('settings')} />
-            : <>
-              {focus === cloudBoardId && cloudBoardId !== null && (
-                <CloudAgentsPanel localSnaps={localSnaps} onChange={refresh} orgName={orgInfo?.orgName ?? null} />
-              )}
-              <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && focusScope.kind === 'project'}
+            : <BoardSection
+                tab={boardTab === 'cloud' && focus !== cloudBoardId ? 'overview' : boardTab}
+                cloudPanel={focus === cloudBoardId && cloudBoardId !== null
+                  ? <CloudAgentsPanel localSnaps={localSnaps} onChange={refresh} orgName={orgInfo?.orgName ?? null} />
+                  : undefined}
+                snaps={shown} focused={focus !== 'all' && focusScope.kind === 'project'}
                 openMessages={shown.reduce((sum, snapshot) => sum
                   + snapshot.threads.filter((thread) => needsAttention(thread, snapshot.board.id, inboxRead)).length, 0)}
                 onTabChange={pickBoardTab} onChange={refresh} />
-              </>
         : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
             <SettingsView />
           </React.Suspense>}

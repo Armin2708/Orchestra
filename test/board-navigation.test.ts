@@ -15,6 +15,9 @@ describe('board-local navigation', () => {
       { id: 'wiki', label: 'Wiki' },
       { id: 'workspace', label: 'Workspace' },
       { id: 'git', label: 'Git' },
+      // rendered only while the cloud project is focused (BoardSection gates on
+      // its cloudPanel prop), but part of the closed tab vocabulary like any other
+      { id: 'cloud', label: 'Cloud agents' },
     ])
   })
 

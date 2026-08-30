@@ -11,6 +11,9 @@ export const BOARD_TABS = [
   { id: 'workspace', label: 'Workspace' },
   // Timeline + Shipped merged into one git-history tab (#181)
   { id: 'git', label: 'Git' },
+  // only offered while the cloud project is focused (App gates it): pick and
+  // choose which of this machine's agents the organization can see (#319)
+  { id: 'cloud', label: 'Cloud agents' },
 ] as const
 
 export type BoardTab = typeof BOARD_TABS[number]['id']

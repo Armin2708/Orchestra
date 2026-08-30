@@ -1969,7 +1969,7 @@ textarea {
 }
 .brand-item-cloud { margin-right: 2px; }
 .cloud-agents {
-  margin: 0 24px 12px; padding: 14px 16px;
+  margin: 12px 24px; padding: 14px 16px;
   border: 1px solid var(--line, rgba(0, 0, 0, 0.1)); border-radius: 10px;
   background: var(--wash, rgba(0, 0, 0, 0.02));
 }
