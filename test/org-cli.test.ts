@@ -28,7 +28,6 @@ const setup = (overrides: Parameters<typeof registerOrgCommands>[1] = {}) => {
     verifyCredential: async () => undefined,
     readToken: async () => valid.deviceToken,
     deviceName: () => 'workstation',
-    activate: async () => undefined,
     output: (line) => output.push(line),
     ...overrides,
   })
@@ -52,14 +51,12 @@ describe('org CLI', () => {
 
   it('verifies and saves a token read from stdin', async () => {
     const verifyCredential = vi.fn(async () => undefined)
-    const activate = vi.fn(async () => undefined)
-    const { output, run, saved } = setup({ verifyCredential, activate })
+    const { output, run, saved } = setup({ verifyCredential })
 
     await run('org', 'join', '--hub', `${valid.hubBaseUrl}/`, '--org', valid.orgId, '--token-stdin')
 
     expect(saved).toEqual([valid])
     expect(verifyCredential).toHaveBeenCalledWith(valid)
-    expect(activate).toHaveBeenCalledOnce()
     expect(output.join('\n')).toContain(`joined ${valid.orgId}`)
     expect(output.join('\n')).not.toContain(valid.deviceToken)
   })
@@ -83,13 +80,11 @@ describe('org CLI', () => {
   it('leave clears the credential and explains server-side revocation', async () => {
     const clearCredential = vi.fn(async () => undefined)
     const clearSyncState = vi.fn(async () => undefined)
-    const activate = vi.fn(async () => undefined)
-    const { output, run } = setup({ clearCredential, clearSyncState, activate })
+    const { output, run } = setup({ clearCredential, clearSyncState })
 
     await run('org', 'leave')
 
     expect(clearCredential).toHaveBeenCalledOnce()
-    expect(activate).toHaveBeenCalledOnce()
     expect(clearSyncState).toHaveBeenCalledOnce()
     expect(output.join('\n')).toContain('does not revoke')
     expect(output.join('\n')).toContain('organization settings')
@@ -104,8 +99,7 @@ describe('org CLI', () => {
       fs.writeFileSync(path.join(home, 'org-state.json'), JSON.stringify({ version: 1, lastSeq: 500 }))
       const { run } = setup({
         clearSyncState: () => clearOrgSyncState(home),
-        activate: async () => undefined,
-      })
+          })
 
       await run('org', 'leave')
       await run('org', 'join', '--hub', valid.hubBaseUrl, '--org', 'org_b', '--token-stdin')
@@ -132,6 +126,17 @@ describe('org CLI', () => {
       expect(fs.existsSync(path.join(home, 'org-state.json'))).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  // The guarantee the restart used to break: connecting to an organization must not
+  // interrupt anyone's agents. The daemon watches the credential instead
+  // (src/org-sync/supervisor.ts), so the CLI has no reason to touch the process.
+  it('never stops or starts the daemon', async () => {
+    const source = fs.readFileSync(new URL('../src/org-cli.ts', import.meta.url), 'utf8')
+    const code = source.replace(/\/\/[^\n]*/gu, '')
+    for (const control of ['stopDaemon', 'ensureDaemon', 'waitForDaemonExit', 'restart']) {
+      expect(code).not.toContain(control)
     }
   })
 })

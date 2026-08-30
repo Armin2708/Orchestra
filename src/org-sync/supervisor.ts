@@ -7,6 +7,7 @@ import {
   type StartDaemonOrgSyncOptions,
 } from './daemon-integration.js'
 import { loadOrgCredential, type OrgCredential } from './credentials.js'
+import { clearOrgSyncState } from './state.js'
 import type { SyncState } from './sync-loop.js'
 
 // `orchestra org join` writes the credential and exits; the daemon that has to act on it
@@ -105,7 +106,15 @@ export async function superviseDaemonOrgSync(
         const previous = handle
         handle = null
         await stopHandle(previous)
-        if (!credential) output('org-sync off (left the organization)')
+        if (!credential) {
+          // Clear the cursor and outbox here, not in the CLI: this is the process that
+          // owns the loop, so by now nothing can still be writing them. A cursor that
+          // outlives its organization gets applied to the next one, silently skipping
+          // that organization's first N events.
+          await clearOrgSyncState(home).catch((error) =>
+            output(`org-sync could not clear local sync state: ${safeMessage(error)}`))
+          output('org-sync off (left the organization)')
+        }
       }
       if (!credential) {
         // Only the boot-time "nothing joined" line is worth printing; later no-ops are silent.

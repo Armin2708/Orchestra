@@ -17,7 +17,6 @@ export interface OrgCliDeps {
   readToken?: () => Promise<string>
   deviceName?: () => string
   output?: (line: string) => void
-  activate?: () => Promise<void>
 }
 
 const normalizedHubUrl = (raw: string): string => {
@@ -55,15 +54,10 @@ export async function verifyOrgCredential(credential: OrgCredential): Promise<vo
   throw new Error(`credential verification failed: hub returned HTTP ${response.status}`)
 }
 
-const activateOrgSync = async (): Promise<void> => {
-  const { ensureDaemon, stopDaemon, waitForDaemonExit } = await import('./daemon.js')
-  if (stopDaemon() && !(await waitForDaemonExit())) {
-    throw new Error('organization connection changed, but the existing daemon did not stop cleanly')
-  }
-  if (!(await ensureDaemon())) {
-    throw new Error('organization connection changed, but the daemon could not start; run `orchestra serve`')
-  }
-}
+// Joining used to stop and restart the daemon, because the daemon read the credential
+// only at boot. It now watches for the change (src/org-sync/supervisor.ts), so joining
+// no longer interrupts anyone's agents — a running daemon connects on its own, and one
+// that is not running picks the credential up whenever it next starts.
 
 export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): void {
   const load = deps.loadCredential ?? (() => loadOrgCredential())
@@ -77,7 +71,6 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
   const readToken = deps.readToken ?? tokenFromStdin
   const deviceName = deps.deviceName ?? os.hostname
   const output = deps.output ?? console.log
-  const activate = deps.activate ?? activateOrgSync
 
   const org = program.command('org').description('join or inspect a hosted Orchestra organization')
   org.command('join')
@@ -113,7 +106,6 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
       }
       await verify(credential)
       await save(credential)
-      await activate()
       output(`joined ${credential.orgId} at ${credential.hubBaseUrl} as ${credential.deviceName}`)
     })
 
@@ -139,11 +131,9 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
     .description('disconnect this daemon from its hosted organization')
     .action(async () => {
       await clear()
-      try {
-        await activate()
-      } finally {
-        await clearState()
-      }
+      // A running daemon clears its own cursor and outbox once it has stopped syncing;
+      // this covers the case where no daemon is running to do it.
+      await clearState()
       output('local organization credential removed; this does not revoke the device token server-side')
       output('revoke the device from the hosted organization settings')
     })

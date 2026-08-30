@@ -181,6 +181,25 @@ describe('superviseDaemonOrgSync', () => {
     await supervisor.stop()
   })
 
+  // A cursor that outlives its organization gets applied to the next one, silently
+  // skipping that organization's first N events. The daemon owns the clearing because
+  // it is the process that was writing them.
+  it('clears the cursor and outbox once the loop has stopped on leave', async () => {
+    await saveOrgCredential(credential('org_a'), home)
+    const rec = recordingStart()
+    const supervisor = await superviseDaemonOrgSync({ home, watch: false, start: rec.start, output: () => {} })
+    await fs.writeFile(path.join(home, 'org-cursor.json'), JSON.stringify({ seq: 500 }))
+    await fs.writeFile(path.join(home, 'outbox.json'), JSON.stringify([{ id: 'op_1' }]))
+
+    await clearOrgCredential(home)
+    await supervisor.reload()
+
+    expect(rec.stopped).toEqual(['org_a'])
+    await expect(fs.access(path.join(home, 'org-cursor.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(home, 'outbox.json'))).rejects.toThrow()
+    await supervisor.stop()
+  })
+
   it('stops the loop and the watcher on shutdown', async () => {
     await saveOrgCredential(credential('org_a'), home)
     const rec = recordingStart()
