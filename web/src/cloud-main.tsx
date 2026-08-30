@@ -1,5 +1,6 @@
 import { ClerkProvider } from '@clerk/react'
 import { createRoot } from 'react-dom/client'
+import { CliApprove } from './CliApprove'
 import { HubApp } from './HubApp'
 
 // The shared cloud workspace's entry — a different deployment from the local board
@@ -23,9 +24,13 @@ function CloudBootstrap() {
       </div>
     )
   }
+  // One extra route, deliberately not a router: /cli is the only other page this bundle has.
+  const isCliApproval = window.location.pathname.replace(/\/+$/, '') === '/cli'
   return (
     <ClerkProvider publishableKey={clerkPublishableKey} afterSignOutUrl="/">
-      <HubApp />
+      {isCliApproval
+        ? <CliApprove params={new URLSearchParams(window.location.search)} />
+        : <HubApp />}
     </ClerkProvider>
   )
 }

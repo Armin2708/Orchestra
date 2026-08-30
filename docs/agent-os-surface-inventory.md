@@ -539,6 +539,7 @@ GET /api/v1/hub/orgs/:orgId/agents
 GET /api/v1/hub/orgs/:orgId/cards
 GET /api/v1/hub/orgs/:orgId/mail/inbox
 GET /api/v1/hub/orgs/:orgId/sync
+GET /api/v1/org
 GET /api/v1/push/status
 GET /api/v1/push/vapid-key
 GET /api/v1/system

@@ -148,6 +148,9 @@ export interface ServerOptions {
   registerActiveWork?: (registration: ActiveWorkRegistration) => () => void
   // test seam: replace the real Finder choose-folder dialog (darwin osascript)
   pickNativeFolder?: () => Promise<{ path: string | null; cancelled: boolean }>
+  /** The daemon's organization sync state, so `orchestra org connect` can wait for a real
+   * connection instead of guessing with a timer. Absent outside the daemon. */
+  orgSyncStatus?: () => { joined: boolean; orgId: string | null; state: string }
 }
 
 // Native macOS choose-folder dialog for “+ Add project”. Runs on the daemon's own
@@ -362,6 +365,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     reply.code(403).send({ error: 'operator authorization is required for this action' })
     return false
   }
+
+  /**
+   * What the daemon is doing about its organization, for `orchestra org connect`'s wait.
+   * Deliberately says nothing about the credential itself — no hub URL, no device name, and
+   * never the token: this reports liveness, and the CLI already holds the credential.
+   */
+  server.get('/api/v1/org', async () => opts.orgSyncStatus?.() ?? { joined: false, orgId: null, state: 'off' })
 
   server.get('/health', async () => {
     const status = await operations.publicReadiness()

@@ -24,6 +24,7 @@ import { buildInitAction, initProviderOption } from './init-cli.js'
 import { registerFirstRunCommands } from './first-run-cli.js'
 import { registerHubCommands } from './hub-cli.js'
 import { registerOrgCommands } from './org-cli.js'
+import { registerLoginCommands } from './login-cli.js'
 import {
   createCentralFirstRunDemoLaunchGate,
 } from './first-run-central-integration.js'
@@ -915,6 +916,7 @@ registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
 registerDoctorCommand(program)
 registerHubCommands(program)
 registerOrgCommands(program)
+registerLoginCommands(program)
 program.command('demo')
   .description('seed a sample board (agents, overlap warning, Q&A, review card) to explore without live sessions')
   .action(buildDemoAction({ api, ensureReady: up, boardUrl: baseUrl }))

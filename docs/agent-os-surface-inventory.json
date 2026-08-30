@@ -699,6 +699,7 @@
       "GET /api/v1/hub/orgs/:orgId/cards",
       "GET /api/v1/hub/orgs/:orgId/mail/inbox",
       "GET /api/v1/hub/orgs/:orgId/sync",
+      "GET /api/v1/org",
       "GET /api/v1/push/status",
       "GET /api/v1/push/vapid-key",
       "GET /api/v1/system",
@@ -716,7 +717,9 @@
     "src/cli.ts",
     "src/agent-os-cli.ts",
     "src/job-assignment-cli.ts",
-    "src/hub-cli.ts"
+    "src/hub-cli.ts",
+    "src/org-cli.ts",
+    "src/login-cli.ts"
   ],
   "cli_commands": {
     "canonical": [
@@ -863,6 +866,8 @@
       "init",
       "install",
       "integrations",
+      "login",
+      "logout",
       "ops",
       "ops backup",
       "ops check-credential",
@@ -875,6 +880,11 @@
       "ops revoke-credential",
       "ops rotate-credential",
       "ops verify-backup",
+      "org",
+      "org connect",
+      "org join",
+      "org leave",
+      "org status",
       "password",
       "password reset",
       "password status",
@@ -886,7 +896,8 @@
       "serve",
       "stop",
       "token",
-      "uninstall"
+      "uninstall",
+      "whoami"
     ]
   },
   "event_vocabularies": {

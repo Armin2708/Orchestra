@@ -711,6 +711,13 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor, qwen)
       return manager
     }, {
+      // Read lazily: `orgSync` is assigned after listen(), and the supervisor replaces its
+      // loop over the daemon's lifetime, so this must never capture a snapshot.
+      orgSyncStatus: () => ({
+        joined: orgSync?.orgId() != null,
+        orgId: orgSync?.orgId() ?? null,
+        state: orgSync?.state() ?? 'off',
+      }),
       token,
       agentToken,
       localOwnerAuth,

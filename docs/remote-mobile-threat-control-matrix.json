@@ -336,7 +336,7 @@
       "evidence": [
         {
           "file": "src/remote.ts",
-          "contains": "if (authDisabled()) throw new Error('remote requires token auth \u2014 unset ORCHESTRA_NO_AUTH first')"
+          "contains": "if (authDisabled()) throw new Error('remote requires token auth — unset ORCHESTRA_NO_AUTH first')"
         }
       ]
     },
@@ -543,7 +543,7 @@
         },
         {
           "file": "src/daemon.ts",
-          "contains": "throw new Error('--expose requires token auth \u2014 unset ORCHESTRA_NO_AUTH to start exposed')"
+          "contains": "throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')"
         }
       ]
     },
@@ -1148,12 +1148,12 @@
   },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 99,
+    "total_get_routes": 100,
     "by_classification": {
       "canonical": 70,
       "compatibility": 5,
       "legacy": 14,
-      "infrastructure": 10
+      "infrastructure": 11
     },
     "interpretation": "The count includes authenticated and intentionally public GET routes and is not an observe grant list. Any read-surface change requires explicit data/resource classification and REM-001 review."
   },
