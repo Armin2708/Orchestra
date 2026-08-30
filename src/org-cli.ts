@@ -333,6 +333,17 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
       output(`org: ${credential.orgId}`)
       output(`device: ${credential.deviceName}`)
       output(`credential: ${status}`)
+      // The credential says whether this machine COULD sync; only the daemon knows
+      // whether it actually IS. Both lines together answer "am I connected?".
+      const daemon = await daemonOrgState().catch(() => null)
+      if (daemon === null) {
+        output('sync: daemon not running — nothing is syncing (orchestra serve to connect)')
+      } else if (!daemon.joined) {
+        output('sync: daemon is running but has not picked up this credential yet')
+      } else {
+        const detail = (daemon as { detail?: string | null }).detail
+        output(`sync: ${daemon.state}${detail ? ` — ${detail}` : ''}`)
+      }
     })
 
   org.command('board')

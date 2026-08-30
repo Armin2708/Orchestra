@@ -1737,6 +1737,20 @@ textarea {
   display: flex; align-items: center; gap: 18px;
   font-size: 12px; color: var(--ink-soft); white-space: nowrap;
 }
+
+/* ── Cloud connection badge (org-sync state, #316) ── */
+.cloud-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-soft); white-space: nowrap; cursor: default;
+}
+.cloud-dot { width: 7px; height: 7px; border-radius: 50%; background: #b9b8b3; }
+.cloud-status-live .cloud-dot { background: #2e9e6b; box-shadow: 0 0 0 3px rgba(46, 158, 107, 0.15); }
+.cloud-status-live { color: #2e7a57; }
+.cloud-status-retry .cloud-dot { background: #d99a2b; animation: cloud-blink 1.4s ease-in-out infinite; }
+.cloud-status-down .cloud-dot { background: #cf4d38; }
+.cloud-status-down { color: #a63e2d; }
+@keyframes cloud-blink { 50% { opacity: 0.35; } }
 .meter { display: inline-flex; align-items: center; gap: 7px; cursor: default; }
 .meter-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; color: #706F6B; }
 .meter-bar {

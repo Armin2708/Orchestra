@@ -420,6 +420,7 @@ function LocalOwnerApp() {
           </div>
         </div>
         <div className="topbar-actions">
+          <CloudStatus />
           <SystemMeter boards={snaps.map((s) => s.board.id)} />
           <nav className="view-tabs">
             <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
@@ -668,6 +669,51 @@ function SubscriptionUsage({ sys }: { sys: SystemInfo }) {
         )}
       </div>
     </details>
+  )
+}
+
+interface OrgSyncStatus {
+  joined: boolean
+  orgId: string | null
+  state: 'off' | 'offline' | 'connecting' | 'live' | 'auth-failed' | 'terminal'
+  detail: string | null
+}
+
+/**
+ * Whether THIS daemon is connected to Orchestra Cloud, always visible in the top
+ * bar. The daemon's `/org` route reports the live sync-loop state; the badge only
+ * has to say it out loud — green when events are flowing, amber while it retries,
+ * red when the hub refused us (the tooltip carries the hub's own reason).
+ */
+function CloudStatus() {
+  const [status, setStatus] = useState<OrgSyncStatus | null>(null)
+  const load = useCallback(() => api('GET', '/org').then(setStatus).catch(() => setStatus(null)), [])
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 10_000)
+    return () => clearInterval(t)
+  }, [load])
+  if (!status) return null
+  const level = !status.joined || status.state === 'off' ? 'off'
+    : status.state === 'live' ? 'live'
+      : status.state === 'auth-failed' || status.state === 'terminal' ? 'down'
+        : 'retry'
+  const label = level === 'off' ? 'local only'
+    : level === 'live' ? 'cloud'
+      : level === 'retry' ? 'cloud…'
+        : 'cloud ✕'
+  const title = level === 'off'
+    ? 'Not connected to Orchestra Cloud — this board is local only. Run `orchestra org connect` to join your organization.'
+    : level === 'live'
+      ? `Connected to Orchestra Cloud — syncing with ${status.orgId}`
+      : level === 'retry'
+        ? `Cloud sync is ${status.state} — retrying; the local board is unaffected`
+        : `Cloud sync stopped${status.detail ? ` — ${status.detail}` : ''}. The local board is unaffected.`
+  return (
+    <span className={`cloud-status cloud-status-${level}`} title={title} role="status" aria-label={title}>
+      <i className="cloud-dot" aria-hidden="true" />
+      {label}
+    </span>
   )
 }
 

@@ -77,6 +77,32 @@ describe('org CLI', () => {
     expect(output.join('\n')).not.toContain(valid.deviceToken)
   })
 
+  it('status reports the daemon sync state, with the hub refusal when there is one', async () => {
+    const { output, run } = setup({
+      loadCredential: async () => valid,
+      verifyCredential: async () => undefined,
+      daemonOrgState: async () => ({
+        joined: true, state: 'auth-failed', detail: 'this org has no subscription',
+      } as { joined: boolean; state: string }),
+    })
+
+    await run('org', 'status')
+
+    expect(output.join('\n')).toContain('sync: auth-failed — this org has no subscription')
+  })
+
+  it('status says nothing is syncing when no daemon is running', async () => {
+    const { output, run } = setup({
+      loadCredential: async () => valid,
+      verifyCredential: async () => undefined,
+      daemonOrgState: async () => { throw new Error('daemon unreachable') },
+    })
+
+    await run('org', 'status')
+
+    expect(output.join('\n')).toContain('sync: daemon not running — nothing is syncing')
+  })
+
   it('leave clears the credential and explains server-side revocation', async () => {
     const clearCredential = vi.fn(async () => undefined)
     const clearSyncState = vi.fn(async () => undefined)
