@@ -19,17 +19,34 @@ export interface CloudSplashDeps {
   output?: (line: string) => void
   /** Prompting only makes sense at a real terminal — never for agents, scripts, or CI. */
   interactive?: () => boolean
+  /** The daemon's live org-sync state, when one is running. */
+  orgSyncState?: () => Promise<{ joined: boolean; state: string } | null>
 }
 
-/** The one-line cloud status shown on the splash, beside the daemon and password lines. */
+/**
+ * The one-line cloud status shown on the splash, beside the daemon and password lines.
+ *
+ * A stored credential means "joined", never "working" — the sync loop can be offline or
+ * stopped outright while the credential remains perfectly valid. Reporting a flat
+ * "connected" in that state is how an operator ends up staring at an empty shared board
+ * with nothing on screen disagreeing with them.
+ */
 export function cloudStatusLine(
-  cli: CliCredential | null, org: OrgCredential | null,
+  cli: CliCredential | null, org: OrgCredential | null, sync?: { state: string } | null,
 ): string {
   if (!cli && !org) return '  ○ not signed in to Orchestra Cloud — local board only'
-  if (cli && org) return `  ● signed in as ${cli.email} — daemon connected to ${org.orgId}`
-  if (cli) return `  ● signed in as ${cli.email} — no organization connected yet`
+  const where = org ? syncPhrase(org, sync) : 'no organization connected yet'
+  if (cli) return `  ${sync && sync.state !== 'live' ? '○' : '●'} signed in as ${cli.email} — ${where}`
   // A device credential with no sign-in is the `org join --token-stdin` path; nothing is wrong.
-  return `  ● daemon connected to ${org!.orgId} — this machine is not signed in`
+  return `  ● ${where} — this machine is not signed in`
+}
+
+const syncPhrase = (org: OrgCredential, sync?: { state: string } | null): string => {
+  if (!sync) return `daemon connected to ${org.orgId}`
+  if (sync.state === 'live') return `daemon syncing with ${org.orgId}`
+  if (sync.state === 'off') return `joined ${org.orgId} — sync not started`
+  // offline / auth-failed / terminal: joined, but not actually exchanging anything.
+  return `joined ${org.orgId} — sync ${sync.state}; run \`orchestra snapshot\` or check the daemon output`
 }
 
 /**
@@ -47,11 +64,12 @@ export async function offerCloudSignIn(deps: CloudSplashDeps = {}): Promise<void
   const loadOrg = deps.loadOrgCredential ?? (() => loadOrgCredential())
   const interactive = deps.interactive ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY))
 
-  const [cli, org] = await Promise.all([
+  const [cli, org, sync] = await Promise.all([
     loadCli().catch(() => null),
     loadOrg().catch(() => null),
+    deps.orgSyncState?.().catch(() => null) ?? Promise.resolve(null),
   ])
-  output(cloudStatusLine(cli, org))
+  output(cloudStatusLine(cli, org, sync))
 
   if (cli || !interactive() || !deps.confirm || !deps.signIn) return
   const declined = deps.declined ?? (() => cloudSignInDeclined())

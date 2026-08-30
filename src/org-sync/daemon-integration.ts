@@ -119,6 +119,9 @@ export async function startDaemonOrgSync(
     }) : undefined
     const applyEvent = options.applyEvent ?? ((event: HubSyncEvent) => localState!.apply(event))
     localState?.reconcileOutbound(outbox.pending())
+    // The last thing the hub refused, so a terminal state can explain itself instead of
+    // guessing. Set by onError below, which sees the error the state change does not.
+    let lastError: string | undefined
     const onStateChange = (state: SyncState) => {
       if (state === 'offline') {
         output(`org-sync offline (${credential.orgId}); local daemon remains available`)
@@ -129,9 +132,13 @@ export async function startDaemonOrgSync(
       if (timer) clearInterval(timer)
       timer = undefined
       sidecarController.abort()
-      const reason = state === 'auth-failed'
-        ? 'authorization failed; rejoin the organization with a valid device token'
-        : 'stopped after a non-retryable hub failure'
+      // Prefer what the hub actually said. A fixed "rejoin with a valid device token" told
+      // an operator to re-authenticate over an unpaid subscription — a problem no token
+      // can fix — and buried the hub's own actionable message one line above it.
+      const reason = lastError
+        ?? (state === 'auth-failed'
+          ? 'authorization failed; rejoin the organization with a valid device token'
+          : 'stopped after a non-retryable hub failure')
       output(`org-sync ${state} (${credential.orgId}): ${reason}; local daemon remains available`)
     }
     loop = options.createLoop?.({
@@ -143,7 +150,10 @@ export async function startDaemonOrgSync(
       onConflict: (error) => output(
         `org-sync conflict: shared card changed or was claimed by someone else; ask the current owner before retrying (${safeError(error)})`,
       ),
-      onError: (error) => output(`org-sync degraded: ${safeError(error)}; local daemon remains available`),
+      onError: (error) => {
+        lastError = safeError(error)
+        output(`org-sync degraded: ${lastError}; local daemon remains available`)
+      },
     }) ?? new SyncLoop({
       client,
       outbox,
@@ -153,7 +163,10 @@ export async function startDaemonOrgSync(
       onConflict: (error) => output(
         `org-sync conflict: shared card changed or was claimed by someone else; ask the current owner before retrying (${safeError(error)})`,
       ),
-      onError: (error) => output(`org-sync degraded: ${safeError(error)}; local daemon remains available`),
+      onError: (error) => {
+        lastError = safeError(error)
+        output(`org-sync degraded: ${lastError}; local daemon remains available`)
+      },
     })
     loop.start()
 

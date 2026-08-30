@@ -42,6 +42,20 @@ describe('cloud status line', () => {
     expect(cloudStatusLine(null, org)).toContain('not signed in')
   })
 
+  // A stored credential means "joined", not "working": the sync loop can be dead while the
+  // credential stays perfectly valid. Saying "connected" then is how you end up staring at
+  // an empty shared board with nothing on screen disagreeing with you.
+  it('does not claim a working connection when sync is not live', () => {
+    expect(cloudStatusLine(cli, org, { state: 'live' })).toContain('syncing with')
+    for (const state of ['offline', 'auth-failed', 'terminal']) {
+      const line = cloudStatusLine(cli, org, { state })
+      expect(line).toContain(`sync ${state}`)
+      expect(line).not.toContain('syncing with')
+      expect(line.trimStart().startsWith('○')).toBe(true)
+    }
+    expect(cloudStatusLine(cli, org, { state: 'off' })).toContain('sync not started')
+  })
+
   it('never prints a token', () => {
     for (const line of [cloudStatusLine(cli, org), cloudStatusLine(cli, null), cloudStatusLine(null, org)]) {
       expect(line).not.toContain(cli.token)

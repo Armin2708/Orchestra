@@ -975,6 +975,12 @@ async function splash(): Promise<boolean> {
   // Cloud status sits beside daemon and password so all three read the same way, and the
   // sign-in it offers is the same flow `orchestra login` runs — see src/cloud-splash.ts.
   await offerCloudSignIn({
+    // Read the daemon's live sync state when one is answering, so the line reports what is
+    // actually happening rather than what the stored credential implies.
+    orgSyncState: async () => {
+      const response = await fetch(`${baseUrl()}/api/v1/org`, { signal: AbortSignal.timeout(400) })
+      return response.ok ? await response.json() as { joined: boolean; state: string } : null
+    },
     confirm: confirmAtTerminal,
     signIn: async () => performLogin(
       { hub: cloudHubUrl(), web: cloudWebUrl() },
