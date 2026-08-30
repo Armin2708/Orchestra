@@ -253,6 +253,9 @@ describe('organization collaboration end to end', () => {
       })
     }
     await waitUntil(() => setup.hub.broadcast.listenerCount(setup.hub.orgId) === 2)
+    // Both daemons' devices must show as connected while their streams are open —
+    // this is what the cloud board's Machines panel reads.
+    expect(setup.hub.broadcast.connectedDeviceIds(setup.hub.orgId).size).toBe(2)
     const orgBoard = (db: Database.Database) => (db.prepare(`SELECT local_board_id AS id
       FROM org_sync_boards WHERE org_id=?`).get(setup.hub.orgId) as { id: number }).id
     return { setup, dbA, dbB, serverA, serverB, outboxA, outboxB,

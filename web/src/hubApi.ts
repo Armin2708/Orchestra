@@ -218,6 +218,24 @@ export async function listHubAgents(orgId: string): Promise<HubAgent[]> {
   return body.agents
 }
 
+export interface HubDeviceSummary {
+  id: string
+  membership_id: string | null
+  name: string
+  last_seen_at: string | null
+  revoked_at: string | null
+  owner_user_id: string | null
+  owner_display_name: string | null
+  owner_email: string | null
+  /** True while this machine's daemon holds an open sync stream to the hub. */
+  connected: boolean
+}
+
+export async function listHubDevices(orgId: string): Promise<HubDeviceSummary[]> {
+  const body = await hubFetch('GET', `/orgs/${orgId}/devices`) as { devices: HubDeviceSummary[] }
+  return body.devices
+}
+
 export async function listHubMilestones(orgId: string): Promise<HubMilestone[]> {
   const body = await hubFetch('GET', `/orgs/${orgId}/milestones`) as { milestones: HubMilestone[] }
   return body.milestones

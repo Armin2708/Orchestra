@@ -48,7 +48,7 @@ function HubSignedOut() {
 
 function HubSignedIn() {
   const { organization, isLoaded } = useOrganization()
-  const [identity, setIdentity] = useState<{ orgId: string } | null>(null)
+  const [identity, setIdentity] = useState<{ orgId: string; userId: string } | null>(null)
   const [identityError, setIdentityError] = useState<string | null>(null)
   // Stripe sends a paying customer back to `${WEB_ORIGIN}/billing?checkout=success`. This app
   // has no router; `vercel.json`'s SPA rewrite serves index.html for that path, and this is
@@ -121,7 +121,7 @@ function HubSignedIn() {
         {tab === 'board' && (
           <UnsubscribedBanner orgId={identity.orgId} onOpenBilling={() => setTab('billing')} />
         )}
-        {tab === 'board' ? <HubBoard orgId={identity.orgId} /> : <BillingPage orgId={identity.orgId} />}
+        {tab === 'board' ? <HubBoard orgId={identity.orgId} userId={identity.userId} /> : <BillingPage orgId={identity.orgId} />}
       </main>
       {mintOpen && <DeviceMintDialog orgId={identity.orgId} onClose={() => setMintOpen(false)} />}
     </div>

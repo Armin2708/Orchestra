@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { agentInk, agentWash, initials } from './api'
 import { agentActivity } from './agentActivity'
 import {
-  HubAgent, HubApiError, HubBoardSummary, HubCard, HubCardColumn, HubMilestone,
-  createHubProject, hubOp, listHubAgents, listHubBoards, listHubCards, listHubMilestones,
+  HubAgent, HubApiError, HubBoardSummary, HubCard, HubCardColumn, HubDeviceSummary, HubMilestone,
+  createHubProject, hubOp, listHubAgents, listHubBoards, listHubCards, listHubDevices, listHubMilestones,
 } from './hubApi'
 import { STATUS } from './Board'
 import './kanban.css'
@@ -22,25 +22,28 @@ const POLL_MS = 5000
  * versa. Stale writes 409 on the hub; the next poll repairs the view, so conflicts
  * lose an edit, never corrupt the board.
  */
-export function HubBoard({ orgId }: { orgId: string }) {
+export function HubBoard({ orgId, userId }: { orgId: string; userId?: string }) {
   const [cards, setCards] = useState<HubCard[] | null>(null)
   const [agents, setAgents] = useState<HubAgent[] | null>(null)
   const [milestones, setMilestones] = useState<HubMilestone[]>([])
   const [boards, setBoards] = useState<HubBoardSummary[]>([])
+  const [devices, setDevices] = useState<HubDeviceSummary[]>([])
   const [error, setError] = useState<string | null>(null)
   const [openCardId, setOpenCardId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [nextCards, nextAgents, nextMilestones] = await Promise.all([
+      const [nextCards, nextAgents, nextMilestones, nextDevices] = await Promise.all([
         listHubCards(orgId), listHubAgents(orgId),
         // An older hub without the milestones route must not blank the whole board.
         listHubMilestones(orgId).catch(() => [] as HubMilestone[]),
+        listHubDevices(orgId).catch(() => [] as HubDeviceSummary[]),
       ])
       setCards(nextCards)
       setAgents(nextAgents)
       setMilestones(nextMilestones)
+      setDevices(nextDevices)
       setError(null)
     } catch (e) {
       setError(e instanceof HubApiError ? e.message : 'failed to load the board')
@@ -136,6 +139,7 @@ export function HubBoard({ orgId }: { orgId: string }) {
       </section>
 
       <aside className="hub-side-panels">
+        <MachinesPanel devices={devices} userId={userId} />
         <HubBoardsPanel orgId={orgId} />
         <section className="hub-agent-roster" aria-label="Agents">
           <h3>Agents</h3>
@@ -154,6 +158,37 @@ export function HubBoard({ orgId }: { orgId: string }) {
           act={act} onClose={() => setOpenCardId(null)} />
       )}
     </div>
+  )
+}
+
+/**
+ * Every row is one person's daemon on one machine — the whole point of the org board
+ * is that several people connect their own CLIs to the same project, so "whose
+ * machine is on right now" is first-class, with the viewer's own device called out.
+ */
+function MachinesPanel({ devices, userId }: { devices: HubDeviceSummary[]; userId?: string }) {
+  const active = devices.filter((d) => !d.revoked_at)
+  if (active.length === 0) return null
+  return (
+    <section className="hub-machines" aria-label="Connected machines">
+      <h3>Machines</h3>
+      <ul>
+        {active.map((d) => {
+          const person = d.owner_display_name || d.owner_email || 'unassigned'
+          const you = userId !== undefined && d.owner_user_id === userId
+          return (
+            <li key={d.id} className="hub-machine-row">
+              <i className={`hub-machine-dot${d.connected ? ' on' : ''}`} aria-hidden="true" />
+              <span className="hub-machine-name">{d.name}</span>
+              <span className="hub-machine-owner">{you ? 'you' : person}</span>
+              <span className={`hub-machine-state${d.connected ? ' on' : ''}`}>
+                {d.connected ? 'connected' : 'offline'}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }
 

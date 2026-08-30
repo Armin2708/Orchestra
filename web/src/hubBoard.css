@@ -205,3 +205,14 @@
   font-size: 0.78rem; color: var(--ink-soft, #666);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0;
 }
+
+/* ── Machines: whose daemon is connected right now ── */
+.hub-machines h3 { margin: 0 0 0.5rem; }
+.hub-machines ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.hub-machine-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; min-width: 0; }
+.hub-machine-dot { width: 8px; height: 8px; border-radius: 50%; background: #b9b8b3; flex: none; }
+.hub-machine-dot.on { background: #2e9e6b; box-shadow: 0 0 0 3px rgba(46, 158, 107, 0.15); }
+.hub-machine-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-machine-owner { color: var(--ink-soft, #666); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-machine-state { margin-left: auto; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-soft, #999); flex: none; }
+.hub-machine-state.on { color: #2e7a57; }
