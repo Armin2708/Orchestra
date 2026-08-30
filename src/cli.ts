@@ -107,7 +107,16 @@ program.command('serve').description('run daemon in foreground')
   .action(async (o) => {
     await serve({ expose: o.expose }); console.log(`orchestra on ${baseUrl()}${o.expose ? ' (exposed on all interfaces)' : ''}`)
   })
-program.command('stop').action(() => { console.log(stopDaemon() ? 'stopped' : 'not running') })
+// Waits for the process to actually go, rather than reporting success on a delivered
+// signal: graceful shutdown takes tens of seconds, so `orchestra stop && orchestra` used
+// to race its own daemon and hit "another Orchestra daemon already owns this data
+// directory". Reporting a stop that has not happened is worse than being slow.
+program.command('stop').action(async () => {
+  if (!stopDaemon()) { console.log('not running'); return }
+  if (await waitForDaemonExit()) { console.log('stopped'); return }
+  console.log('the daemon did not exit in time — it is still shutting down; check with `orchestra snapshot`')
+  process.exitCode = 1
+})
 program.command('restart').description('gracefully restart the daemon — defers while hired agents are live')
   .option('--force', 'restart anyway (hired agents resume from saved sessions; one-shot auditors do not survive)')
   .action(async (o) => {
