@@ -66,3 +66,25 @@ export async function loadCliCredential(home?: string): Promise<CliCredential | 
 export async function clearCliCredential(home?: string): Promise<void> {
   await fs.rm(credentialPath(home), { force: true })
 }
+
+/**
+ * Whether the startup splash has already offered a cloud sign-in and been declined.
+ *
+ * Asking once is a helpful nudge; asking on every daemon start is a nuisance in the free
+ * local product, which must remain fully usable without an account. The status line stays
+ * either way, so the option never becomes undiscoverable.
+ */
+export async function cloudSignInDeclined(home?: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(home ?? dataDir(), 'cloud-signin-declined'))
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function declineCloudSignIn(home?: string): Promise<void> {
+  const directory = home ?? dataDir()
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 })
+  await fs.writeFile(path.join(directory, 'cloud-signin-declined'), `${new Date().toISOString()}\n`, { mode: 0o600 })
+}

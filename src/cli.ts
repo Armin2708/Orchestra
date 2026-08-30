@@ -24,7 +24,9 @@ import { buildInitAction, initProviderOption } from './init-cli.js'
 import { registerFirstRunCommands } from './first-run-cli.js'
 import { registerHubCommands } from './hub-cli.js'
 import { registerOrgCommands } from './org-cli.js'
-import { registerLoginCommands } from './login-cli.js'
+import { registerLoginCommands, performLogin, cloudHubUrl, cloudWebUrl } from './login-cli.js'
+import { connectOrg, defaultConnectOrgDeps } from './org-cli.js'
+import { confirmAtTerminal, machineName, offerCloudSignIn } from './cloud-splash.js'
 import {
   createCentralFirstRunDemoLaunchGate,
 } from './first-run-central-integration.js'
@@ -961,7 +963,21 @@ async function splash(): Promise<boolean> {
     ? `  ● daemon running — ${baseUrl()}`
     : '  ○ daemon not running — starting it now')
   console.log(`  ${passwordConfigured() ? '●' : '○'} password ${passwordConfigured() ? 'set' : 'not set'} — ${passwordConfigured() ? 'phone signs in with it; localhost needs none' : 'create one to enable phone sign-in'}`)
+  // Cloud status sits beside daemon and password so all three read the same way, and the
+  // sign-in it offers is the same flow `orchestra login` runs — see src/cloud-splash.ts.
+  await offerCloudSignIn({
+    confirm: confirmAtTerminal,
+    signIn: async () => performLogin(
+      { hub: cloudHubUrl(), web: cloudWebUrl() },
+      { deviceLabel: machineName },
+    ),
+    connect: async () => {
+      const { org, live } = await connectOrg(defaultConnectOrgDeps())
+      return { name: org.name, live }
+    },
+  })
   console.log(['',
+    '  orchestra login      sign in to Orchestra Cloud',
     '  orchestra password   local browser password status / reset',
     '  orchestra remote     QR code to open the board on your phone',
     '  orchestra snapshot   current board state',

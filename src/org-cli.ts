@@ -139,6 +139,89 @@ async function promptForOrg(orgs: HubOrgSummary[]): Promise<HubOrgSummary> {
   }
 }
 
+
+export interface ConnectOrgDeps {
+  loadCliCredential: () => Promise<CliCredential | null>
+  listOrgs: (credential: CliCredential) => Promise<HubOrgSummary[]>
+  mintDevice: (credential: CliCredential, orgId: string, name: string) => Promise<string>
+  saveCredential: (credential: OrgCredential) => Promise<void>
+  daemonOrgState: () => Promise<{ joined: boolean; state: string }>
+  chooseOrg: (orgs: HubOrgSummary[]) => Promise<HubOrgSummary>
+  spinner: (label: string, work: () => Promise<void>) => Promise<void>
+  deviceName: () => string
+  output: (line: string) => void
+  connectTimeoutMs: number
+}
+
+/**
+ * Connect this machine to an organization. Shared by `orchestra org connect` and the
+ * sign-in prompt on the startup splash, so both behave identically.
+ */
+export async function connectOrg(
+  deps: ConnectOrgDeps, options: { org?: string; name?: string } = {},
+): Promise<{ org: HubOrgSummary; live: boolean }> {
+  const credential = await deps.loadCliCredential()
+  if (!credential) throw new Error('not signed in — run `orchestra login` first')
+
+  const orgs = await deps.listOrgs(credential)
+  if (orgs.length === 0) {
+    throw new Error('this account has no organizations yet — create one in Orchestra Cloud')
+  }
+  const wanted = options.org?.trim()
+  const chosen = wanted
+    ? orgs.find((org) => org.org_id === wanted)
+    // A single organization is not a choice worth interrupting anyone for.
+    : orgs.length === 1 ? orgs[0] : await deps.chooseOrg(orgs)
+  if (!chosen) throw new Error(`you are not a member of ${wanted}`)
+
+  const name = (options.name ?? deps.deviceName()).trim()
+  const token = await deps.mintDevice(credential, chosen.org_id, name)
+  await deps.saveCredential({
+    hubBaseUrl: normalizedHubUrl(credential.hubBaseUrl),
+    orgId: chosen.org_id,
+    deviceToken: token,
+    deviceName: name,
+  })
+
+  // The daemon watches the credential file, so this is a real wait on a real state change,
+  // not a decorative pause. If no daemon is running there is nothing to wait for — the
+  // credential is saved and the next start picks it up.
+  let live = false
+  await deps.spinner(`connecting to ${chosen.name}`, async () => {
+    const deadline = Date.now() + deps.connectTimeoutMs
+    while (Date.now() < deadline) {
+      const state = await deps.daemonOrgState().catch(() => null)
+      if (state === null) return
+      if (state.joined && state.state !== 'off' && state.state !== 'offline') { live = true; return }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  })
+  return { org: chosen, live }
+}
+
+/** The production wiring for `connectOrg`, shared by the CLI command and the splash prompt. */
+export function defaultConnectOrgDeps(output: (line: string) => void = console.log): ConnectOrgDeps {
+  return {
+    loadCliCredential: () => loadCliCredential(),
+    listOrgs: async (credential) =>
+      ((await hubJson(credential, 'GET', '/cli/orgs')) as { orgs: HubOrgSummary[] }).orgs,
+    mintDevice: async (credential, orgId, name) =>
+      ((await hubJson(credential, 'POST', `/cli/orgs/${encodeURIComponent(orgId)}/devices`, { name })) as { token: string }).token,
+    saveCredential: (credential) => saveOrgCredential(credential),
+    daemonOrgState: async () => {
+      const { baseUrl } = await import('./daemon.js')
+      const response = await fetch(`${baseUrl()}/api/v1/org`, { signal: AbortSignal.timeout(2_000) })
+      if (!response.ok) throw new Error('daemon unreachable')
+      return await response.json() as { joined: boolean; state: string }
+    },
+    chooseOrg: promptForOrg,
+    spinner: ttySpinner(output),
+    deviceName: () => os.hostname().split('.')[0],
+    output,
+    connectTimeoutMs: 20_000,
+  }
+}
+
 export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): void {
   const load = deps.loadCredential ?? (() => loadOrgCredential())
   const save = deps.saveCredential ?? ((credential) => saveOrgCredential(credential))
@@ -208,44 +291,11 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
     .option('--org <id>', 'skip the picker and connect this organization')
     .option('--name <name>', 'device name shown in organization settings')
     .action(async (options: { org?: string; name?: string }) => {
-      const credential = await loadCli()
-      if (!credential) throw new Error('not signed in — run `orchestra login` first')
-
-      const orgs = await listOrgs(credential)
-      if (orgs.length === 0) {
-        throw new Error('this account has no organizations yet — create one in Orchestra Cloud')
-      }
-      const wanted = options.org?.trim()
-      const chosen = wanted
-        ? orgs.find((org) => org.org_id === wanted)
-        // A single organization is not a choice worth interrupting anyone for.
-        : orgs.length === 1 ? orgs[0] : await chooseOrg(orgs)
-      if (!chosen) throw new Error(`you are not a member of ${wanted}`)
-
-      const name = (options.name ?? deviceName()).trim()
-      const token = await mintDevice(credential, chosen.org_id, name)
-      await save({
-        hubBaseUrl: normalizedHubUrl(credential.hubBaseUrl),
-        orgId: chosen.org_id,
-        deviceToken: token,
-        deviceName: name,
-      })
-
-      // The daemon watches the credential file, so this is a real wait on a real state
-      // change, not a decorative pause. If no daemon is running there is nothing to wait
-      // for — the credential is saved and the next start picks it up.
-      let live = false
-      await spin(`connecting to ${chosen.name}`, async () => {
-        const deadline = Date.now() + connectTimeoutMs
-        while (Date.now() < deadline) {
-          const state = await daemonOrgState().catch(() => null)
-          if (state === null) return
-          if (state.joined && state.state !== 'off' && state.state !== 'offline') { live = true; return }
-          await new Promise((resolve) => setTimeout(resolve, 250))
-        }
-      })
-
-      output(`connected to ${chosen.name}`)
+      const { org, live } = await connectOrg({
+        loadCliCredential: loadCli, listOrgs, mintDevice, saveCredential: save,
+        daemonOrgState, chooseOrg, spinner: spin, deviceName, output, connectTimeoutMs,
+      }, options)
+      output(`connected to ${org.name}`)
       if (!live) {
         output('the daemon is not running yet — it will connect when you next start Orchestra')
       }
