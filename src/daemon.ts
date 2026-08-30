@@ -265,7 +265,17 @@ export function ensureTerminalHistoryDigestKey(root = dataDir()): Buffer {
   return verified
 }
 
-export interface ServeOptions { expose?: boolean }
+export interface ServeOptions {
+  expose?: boolean
+  /**
+   * Where org-sync narrates its progress. The foreground CLI passes a sink that renders
+   * through its spinner; a detached daemon leaves it as console.log. Passed in rather than
+   * discovered, because daemon-integration captures its output function once at startup —
+   * reassigning console.log afterwards does nothing, which is exactly the bug that made an
+   * earlier attempt splice a daemon line through the middle of the spinner.
+   */
+  orgSyncOutput?: (line: string) => void
+}
 
 export type CodexProviderContractRouting = {
   enabled: boolean
@@ -1014,6 +1024,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     // Supervised, not started once: `orchestra org join` runs in a different process, so
     // the daemon watches the credential and connects without needing a restart.
     orgSync = await superviseDaemonOrgSync({
+      ...(opts.orgSyncOutput ? { output: opts.orgSyncOutput } : {}),
       home: orchestraDataDir,
       localDb: db,
       publishLocalChange: (event) => server.bus.emit('event', event),

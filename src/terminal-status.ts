@@ -97,7 +97,7 @@ export interface OrgSyncSnapshot { joined: boolean; orgId: string | null; state:
  */
 export async function awaitOrgSync(
   read: () => Promise<OrgSyncSnapshot | null>,
-  options: { status?: TerminalStatus; timeoutMs?: number; pollMs?: number } = {},
+  options: { status?: TerminalStatus; timeoutMs?: number; pollMs?: number; label?: string } = {},
 ): Promise<OrgSyncSnapshot | null> {
   const status = options.status ?? new TerminalStatus()
   const deadline = Date.now() + (options.timeoutMs ?? 20_000)
@@ -105,17 +105,11 @@ export async function awaitOrgSync(
   const first = await read().catch(() => null)
   if (!first || !first.joined) return first
 
-  status.start(`org-sync · connecting to ${first.orgId}`)
-  // Own stdout for the span of the spin. The daemon logs from this same process while the
-  // loop settles, and a redraw landing mid-line makes both unreadable — routing those
-  // lines through `log()` is what makes an animated CLI safe rather than a nice idea.
-  const restore = console.log
-  console.log = (...args: unknown[]) => status.log(args.map(String).join(' '))
+  status.start(options.label ?? 'connecting to Orchestra Cloud')
   let latest = first
-  try {
   while (Date.now() < deadline) {
     if (latest.state === 'live') {
-      status.succeed(`org-sync live — ${latest.orgId}`)
+      status.succeed(`connected to Orchestra Cloud — ${latest.orgId}`)
       return latest
     }
     if (latest.state === 'auth-failed' || latest.state === 'terminal') {
@@ -126,9 +120,6 @@ export async function awaitOrgSync(
     latest = (await read().catch(() => null)) ?? latest
   }
   // Saying nothing is better than claiming either outcome: it may still be retrying.
-  status.fail(`org-sync still connecting to ${latest.orgId} — check \`orchestra org status\``)
+  status.fail(`org-sync still connecting — check \`orchestra org status\``)
   return latest
-  } finally {
-    console.log = restore
-  }
 }

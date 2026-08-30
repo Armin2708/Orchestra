@@ -27,7 +27,7 @@ import { registerOrgCommands } from './org-cli.js'
 import { registerLoginCommands, performLogin, cloudHubUrl, cloudWebUrl } from './login-cli.js'
 import { connectOrg, defaultConnectOrgDeps } from './org-cli.js'
 import { confirmAtTerminal, machineName, offerCloudSignIn } from './cloud-splash.js'
-import { awaitOrgSync, type OrgSyncSnapshot } from './terminal-status.js'
+import { awaitOrgSync, TerminalStatus, type OrgSyncSnapshot } from './terminal-status.js'
 import {
   createCentralFirstRunDemoLaunchGate,
 } from './first-run-central-integration.js'
@@ -1006,15 +1006,24 @@ if (process.argv.length <= 2) {
   // bare `orchestra` boots the daemon; splash first so status is visible either way
   void splash().then(async (running) => {
     if (running) return
-    await serve({})
+    // The sync loop narrates itself, and its verdict lands after serve() returns — so
+    // during startup the CLI holds those lines and reports one outcome instead. Held
+    // rather than discarded: if the spin ends without a verdict they are printed, so a
+    // slow or unusual failure is never swallowed.
+    const status = new TerminalStatus()
+    const held: string[] = []
+    let holding = true
+    await serve({ orgSyncOutput: (line) => { if (holding) held.push(line); else status.log(line) } })
     console.log(`orchestra on ${baseUrl()}`)
-    // The sync loop settles after serve() returns, so without waiting here its verdict
-    // lands after the CLI's last line — which is how a subscription refusal ended up
-    // buried. Spin until it decides, then say which way it went.
-    await awaitOrgSync(async () => {
+    const settled = await awaitOrgSync(async () => {
       const response = await fetch(`${baseUrl()}/api/v1/org`, { signal: AbortSignal.timeout(1_000) })
       return response.ok ? await response.json() as OrgSyncSnapshot : null
-    }).catch(() => null)
+    }, { status }).catch(() => null)
+    holding = false
+    // A verdict was printed, so the held narration would only repeat it.
+    if (!settled || (settled.state !== 'live' && settled.state !== 'auth-failed' && settled.state !== 'terminal')) {
+      for (const line of held) console.log(line)
+    }
   }).catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
 } else {
   program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })

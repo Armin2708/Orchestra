@@ -64,7 +64,7 @@ describe('awaitOrgSync', () => {
 
     expect(result?.state).toBe('live')
     expect(read.mock.calls.length).toBeGreaterThan(1)
-    expect(text()).toContain('✓ org-sync live — org_a')
+    expect(text()).toContain('✓ connected to Orchestra Cloud — org_a')
   })
 
   // The failure that started all of this: the reason has to reach the final line.
@@ -99,23 +99,17 @@ describe('awaitOrgSync', () => {
     expect(text()).not.toContain('✓')
   })
 
-  // Patching console.log is what makes the animation safe; leaving it patched would be
-  // far worse than never animating.
-  it('always restores console.log, even when reading throws', async () => {
+  // An earlier attempt routed the daemon's lines by reassigning console.log. It silently
+  // did nothing — daemon-integration captures its output function once at startup — and
+  // the daemon's line landed spliced through the middle of a spinner frame. The sink is
+  // passed in now, so this asserts the spinner never touches the global.
+  it('never reassigns console.log', async () => {
     const { status } = recorder()
     const original = console.log
-    const read = vi.fn(async () => { throw new Error('daemon went away') })
+    const read = vi.fn(async () => snapshot({ state: 'live' }))
 
-    // the first read failing means it never spins; make the SECOND one throw instead
-    let first = true
-    const flaky = vi.fn(async () => {
-      if (first) { first = false; return snapshot() }
-      throw new Error('daemon went away')
-    })
-    await awaitOrgSync(flaky, { status, timeoutMs: 20, pollMs: 1 })
-    expect(console.log).toBe(original)
+    await awaitOrgSync(read, { status, pollMs: 1 })
 
-    await awaitOrgSync(read, { status, timeoutMs: 20, pollMs: 1 })
     expect(console.log).toBe(original)
   })
 })
