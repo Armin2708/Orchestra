@@ -10,6 +10,9 @@ export interface OrgCredential {
   orgId: string
   deviceToken: string
   deviceName: string
+  /** Human name of the organization, captured at connect time (the hub's /cli/orgs
+   * listing). Display only — every API call still addresses the org by id. */
+  orgName?: string
 }
 
 const credentialPath = (home?: string) => path.join(home ?? dataDir(), 'org.json')
@@ -22,6 +25,7 @@ const isCredential = (value: unknown): value is OrgCredential => {
     || typeof candidate.deviceToken !== 'string'
     || typeof candidate.deviceName !== 'string') return false
   if (!candidate.orgId || !candidate.deviceName || !candidate.deviceToken.startsWith(DEVICE_TOKEN_PREFIX)) return false
+  if (candidate.orgName !== undefined && typeof candidate.orgName !== 'string') return false
   try {
     const url = new URL(candidate.hubBaseUrl)
     return (url.protocol === 'http:' || url.protocol === 'https:') && url.pathname === '/'

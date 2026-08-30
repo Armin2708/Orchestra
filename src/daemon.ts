@@ -726,6 +726,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       orgSyncStatus: () => ({
         joined: orgSync?.orgId() != null,
         orgId: orgSync?.orgId() ?? null,
+        orgName: orgSync?.orgName() ?? null,
         state: orgSync?.state() ?? 'off',
         detail: orgSync?.detail() ?? null,
       }),

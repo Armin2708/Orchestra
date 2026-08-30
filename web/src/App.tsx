@@ -675,6 +675,7 @@ function SubscriptionUsage({ sys }: { sys: SystemInfo }) {
 interface OrgSyncStatus {
   joined: boolean
   orgId: string | null
+  orgName: string | null
   state: 'off' | 'offline' | 'connecting' | 'live' | 'auth-failed' | 'terminal'
   detail: string | null
 }
@@ -705,7 +706,7 @@ function CloudStatus() {
   const title = level === 'off'
     ? 'Not connected to Orchestra Cloud — this board is local only. Run `orchestra org connect` to join your organization.'
     : level === 'live'
-      ? `Connected to Orchestra Cloud — syncing with ${status.orgId}`
+      ? `Connected to Orchestra Cloud — syncing with ${status.orgName ?? status.orgId}`
       : level === 'retry'
         ? `Cloud sync is ${status.state} — retrying; the local board is unaffected`
         : `Cloud sync stopped${status.detail ? ` — ${status.detail}` : ''}. The local board is unaffected.`

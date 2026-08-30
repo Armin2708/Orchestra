@@ -195,6 +195,7 @@ export async function connectOrg(
   await deps.saveCredential({
     hubBaseUrl: normalizedHubUrl(credential.hubBaseUrl),
     orgId: chosen.org_id,
+    orgName: chosen.name,
     deviceToken: token,
     deviceName: name,
   })
@@ -330,7 +331,7 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
         status = `not verified (${error instanceof Error ? error.message : 'verification failed'})`
       }
       output(`hub: ${credential.hubBaseUrl}`)
-      output(`org: ${credential.orgId}`)
+      output(`org: ${credential.orgName ?? credential.orgId}`)
       output(`device: ${credential.deviceName}`)
       output(`credential: ${status}`)
       // The credential says whether this machine COULD sync; only the daemon knows
@@ -359,11 +360,11 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
       }
       const board = await (deps.orgBoardLookup ?? defaultOrgBoardLookup)(credential.orgId)
       if (!board) {
-        output(`org: ${credential.orgId}`)
+        output(`org: ${credential.orgName ?? credential.orgId}`)
         output('no local org board yet — it is created when the daemon first syncs; is the daemon running?')
         return
       }
-      output(`org: ${credential.orgId}`)
+      output(`org: ${credential.orgName ?? credential.orgId}`)
       output(`local org board id: ${board.boardId}`)
       output('cards created or claimed on this board are shared with the organization')
       output(`message a teammate's agent: orchestra ask <agent> '<question>' on this board`)

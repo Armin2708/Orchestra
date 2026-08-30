@@ -25,6 +25,8 @@ export interface DaemonOrgSyncSupervisor {
   state(): SupervisedSyncState
   /** The joined organization, or null. */
   orgId(): string | null
+  /** Display name captured at connect; null for credentials saved before it existed. */
+  orgName(): string | null
   /** Why sync is in its current state, when the hub gave a reason. */
   detail(): string | null
   /** Re-read the credential and start, stop, or switch the sync loop to match it. */
@@ -50,6 +52,9 @@ const safeMessage = (error: unknown): string => (error instanceof Error ? error.
 // must not interrupt a healthy loop.
 const fingerprint = (credential: OrgCredential | null): string | null => credential && JSON.stringify([
   credential.hubBaseUrl, credential.orgId, credential.deviceToken, credential.deviceName,
+  // Display-only, but part of the fingerprint so a backfilled name takes effect
+  // without waiting for an unrelated credential change.
+  credential.orgName ?? null,
 ])
 
 export async function superviseDaemonOrgSync(
@@ -63,6 +68,7 @@ export async function superviseDaemonOrgSync(
   let handle: DaemonOrgSyncHandle | null = null
   let current: string | null = null
   let currentOrgId: string | null = null
+  let currentOrgName: string | null = null
   let announcedOff = false
   let stopped = false
   let watcher: fs.FSWatcher | undefined
@@ -103,6 +109,7 @@ export async function superviseDaemonOrgSync(
     // reload a no-op and strand the daemon offline.
     current = next
     currentOrgId = credential?.orgId ?? null
+    currentOrgName = credential?.orgName ?? null
     try {
       if (handle) {
         const previous = handle
@@ -129,6 +136,7 @@ export async function superviseDaemonOrgSync(
     } catch (error) {
       current = null
       currentOrgId = null
+      currentOrgName = null
       output(`org-sync could not connect: ${safeMessage(error)}; it will retry on the next credential change`)
     }
   }
@@ -162,6 +170,7 @@ export async function superviseDaemonOrgSync(
   return {
     state: () => handle?.state() ?? 'off',
     orgId: () => currentOrgId,
+    orgName: () => currentOrgName,
     detail: () => handle?.detail() ?? null,
     reload,
     stop: async () => {

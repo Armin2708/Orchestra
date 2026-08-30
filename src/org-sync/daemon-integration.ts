@@ -154,7 +154,7 @@ export async function startDaemonOrgSync(
     }
     const onStateChange = (state: SyncState) => {
       if (state === 'live') {
-        say(`org-sync · live — ${credential.orgId} as ${credential.deviceName}`)
+        say(`org-sync · live — ${credential.orgName ?? credential.orgId} as ${credential.deviceName}`)
         return
       }
       if (state === 'offline') {
@@ -254,7 +254,7 @@ export async function startDaemonOrgSync(
       }, options.heartbeatMs ?? 15_000)
       timer.unref()
     }
-    say(`org-sync · connecting to ${credential.orgId} at ${credential.hubBaseUrl}`)
+    say(`org-sync · connecting to ${credential.orgName ?? credential.orgId} at ${credential.hubBaseUrl}`)
 
     let stopped = false
     return {
