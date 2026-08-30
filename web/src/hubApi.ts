@@ -66,21 +66,37 @@ export async function hubFetch(method: string, path: string, body?: unknown): Pr
   }
   const base = readHubEnv('VITE_HUB_BASE_URL')!
 
+  const send = (token: string) => {
+    const headers: Record<string, string> = { authorization: `Bearer ${token}` }
+    if (body !== undefined) headers['content-type'] = 'application/json'
+    return fetch(`${base}/api/v1/hub${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
+    })
+  }
+
   const token = await getToken()
   if (!token) throw new HubApiError(401, 'not signed in')
 
-  const headers: Record<string, string> = { authorization: `Bearer ${token}` }
-  if (body !== undefined) headers['content-type'] = 'application/json'
+  let res = await send(token)
 
-  const res = await fetch(`${base}/api/v1/hub${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: 'omit',
-    cache: 'no-store',
-    redirect: 'error',
-    referrerPolicy: 'no-referrer',
-  })
+  // Clerk caches session tokens, and the hub reads the ACTIVE ORG from the token's
+  // `org_id` claim (resolveOrgForClerk in src/hub/clerk.ts). So immediately after signing
+  // in, creating an org, or switching orgs, the cached token still carries the previous
+  // claim — or none — and the hub correctly answers 403 "user is not a member of this
+  // org". Reloading the page fixed it, which is not something a user should have to
+  // discover. Mint a fresh token and retry exactly once: a genuine non-member still gets
+  // 403, and one extra request on an already-failed call costs nothing.
+  if (res.status === 403) {
+    const fresh = await getToken({ skipCache: true }).catch(() => null)
+    if (fresh && fresh !== token) res = await send(fresh)
+  }
+
   if (!res.ok) throw new HubApiError(res.status, await hubErrorMessage(res))
   return res.json()
 }

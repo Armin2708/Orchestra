@@ -70,6 +70,57 @@ describe('web/src/hubApi', () => {
       expect(init.credentials).toBe('omit')
     })
 
+    // Reported in real use: connecting an org gave "user is not a member of this org", and
+    // a page refresh fixed it. Clerk serves a CACHED session token, and the hub reads the
+    // active org from that token's org_id claim — so right after sign-in or an org switch
+    // the cached claim is stale and the hub correctly refuses it.
+    it('retries once with a fresh token when the hub answers 403', async () => {
+      mockedGetToken.mockImplementation(async (options?: { skipCache?: boolean }) =>
+        (options?.skipCache ? 'clerk_jwt_fresh' : 'clerk_jwt_stale') as any)
+      const fetchSpy = vi.fn(async (_url: string, init: RequestInit) =>
+        (init.headers as Record<string, string>).authorization === 'Bearer clerk_jwt_fresh'
+          ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+          : new Response(JSON.stringify({ error: 'user is not a member of this org', code: 'forbidden' }), { status: 403 }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      const result = await hubFetch('GET', '/orgs/org_a/cards')
+
+      expect(result).toEqual({ ok: true })
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      expect(mockedGetToken).toHaveBeenCalledWith({ skipCache: true })
+    })
+
+    it('gives up after one retry so a genuine non-member still fails', async () => {
+      mockedGetToken.mockImplementation(async (options?: { skipCache?: boolean }) =>
+        (options?.skipCache ? 'clerk_jwt_fresh' : 'clerk_jwt_stale') as any)
+      const fetchSpy = vi.fn(async () =>
+        new Response(JSON.stringify({ error: 'user is not a member of this org', code: 'forbidden' }), { status: 403 }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      await expect(hubFetch('GET', '/orgs/org_a/cards')).rejects.toMatchObject({
+        status: 403, message: 'user is not a member of this org',
+      })
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not retry when the fresh token is the same one that just failed', async () => {
+      const fetchSpy = vi.fn(async () =>
+        new Response(JSON.stringify({ error: 'nope', code: 'forbidden' }), { status: 403 }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      await expect(hubFetch('GET', '/orgs/org_a/cards')).rejects.toMatchObject({ status: 403 })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not retry a non-403 failure', async () => {
+      const fetchSpy = vi.fn(async () =>
+        new Response(JSON.stringify({ error: 'boom', code: 'internal' }), { status: 500 }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      await expect(hubFetch('GET', '/orgs/org_a/cards')).rejects.toMatchObject({ status: 500 })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
     it('serializes a body as JSON with a content-type header', async () => {
       const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ id: 1 }), { status: 200 }))
       vi.stubGlobal('fetch', fetchSpy)
