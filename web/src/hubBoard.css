@@ -96,3 +96,21 @@
 }
 .billing-checkout-success { background: rgba(38, 132, 87, 0.10); color: #1f6f45; }
 .billing-checkout-cancelled { background: var(--wash, rgba(0, 0, 0, 0.04)); color: var(--ink-soft); }
+
+/* Unsubscribed org: the API refuses writes, so say so where people actually look. */
+.hub-paywall {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--warn-border, #e0c07a);
+  background: var(--warn-bg, #fdf6e3);
+  color: var(--warn-fg, #5c4813);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+.hub-paywall .btn { flex: none; }

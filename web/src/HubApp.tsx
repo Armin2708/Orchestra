@@ -4,6 +4,7 @@ import { OrchestraMark } from './BrandMark'
 import { ClerkAuthControls } from './ClerkAuthControls'
 import { HubBoard } from './HubBoard'
 import { BillingPage } from './BillingPage'
+import { UnsubscribedBanner } from './UnsubscribedBanner'
 import { checkoutOutcome } from './billingRedirect'
 import { HubApiError, mintHubDeviceToken, resolveHubIdentity } from './hubApi'
 import './hubBoard.css'
@@ -115,6 +116,11 @@ function HubSignedIn() {
         </div>
       </header>
       <main className="hub-app-body">
+        {/* Above the board, not inside it: the refusal applies to the whole org, and the
+            board is exactly where someone stands while wondering why nothing appears. */}
+        {tab === 'board' && (
+          <UnsubscribedBanner orgId={identity.orgId} onOpenBilling={() => setTab('billing')} />
+        )}
         {tab === 'board' ? <HubBoard orgId={identity.orgId} /> : <BillingPage orgId={identity.orgId} />}
       </main>
       {mintOpen && <DeviceMintDialog orgId={identity.orgId} onClose={() => setMintOpen(false)} />}
