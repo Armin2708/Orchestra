@@ -124,7 +124,7 @@ export async function startDaemonOrgSync(
       const orgDirectory = createHash('sha256').update(credential.orgId).digest('hex').slice(0, 16)
       const projectPath = path.join(home, 'organizations', orgDirectory)
       fs.mkdirSync(projectPath, { recursive: true })
-      localBoardId = ensureLocalOrgBoard(localDb, credential.orgId, projectPath)
+      localBoardId = ensureLocalOrgBoard(localDb, credential.orgId, projectPath, credential.orgName)
     }
     const localState = localDb ? new LocalBoardState({
       db: localDb,

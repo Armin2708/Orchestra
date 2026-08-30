@@ -1,66 +1,81 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { agentInk, agentWash, initials } from './api'
 import { agentActivity } from './agentActivity'
 import {
   HubAgent, HubApiError, HubBoardSummary, HubCard, HubCardColumn, HubMilestone,
-  createHubProject, listHubAgents, listHubBoards, listHubCards, listHubMilestones,
+  createHubProject, hubOp, listHubAgents, listHubBoards, listHubCards, listHubMilestones,
 } from './hubApi'
 import { STATUS } from './Board'
 import './kanban.css'
 import './hubBoard.css'
 
-// Cards and agents render flat across the org, same lanes `STATUS` (Board.tsx) already
-// defines for the local board. The boards panel below is separate on purpose: what a member
-// actually needs from it is a board ID to hand a daemon, not a filter — every write op takes
-// one, and until the projects/boards routes existed there was no way to see or create one.
+// Same lanes as the local board (`STATUS`, Board.tsx) so the cloud board reads as the
+// same product — one shared org-wide view instead of one per machine.
 const LANES: HubCardColumn[] = ['backlog', 'in_progress', 'blocked', 'review', 'done']
 
 const POLL_MS = 5000
 
 /**
- * The org board: read-only by design (see the report for why — the hub's ops
- * endpoint speaks a different, event-sourced mutation shape than the local
- * daemon's REST-ish `/cards/:id/move`, and forking `KanbanView`/`ProjectGrid`
- * to speak both was explicitly out of scope: "reuse existing board components,
- * do not fork them"). Reuses `kanban.css`'s classes and `STATUS`'s labels/colors
- * from the local board so this reads as the same product, and `agentActivity`
- * (structurally typed — `{ status, last_seen }` — HubAgent's `state`/
- * `last_heartbeat_at` map onto it below) for the same "is this agent actually
- * working right now" pulse the local kanban owner chip uses.
+ * The org board people actually WORK on — not a read-only mirror. Every mutation goes
+ * through the hub's ops endpoint (`hubOp`), the same event-sourced channel the daemons
+ * speak, so a card moved here lands on every connected machine's local board and vice
+ * versa. Stale writes 409 on the hub; the next poll repairs the view, so conflicts
+ * lose an edit, never corrupt the board.
  */
 export function HubBoard({ orgId }: { orgId: string }) {
   const [cards, setCards] = useState<HubCard[] | null>(null)
   const [agents, setAgents] = useState<HubAgent[] | null>(null)
   const [milestones, setMilestones] = useState<HubMilestone[]>([])
+  const [boards, setBoards] = useState<HubBoardSummary[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [openCardId, setOpenCardId] = useState<string | null>(null)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const [nextCards, nextAgents, nextMilestones] = await Promise.all([
+        listHubCards(orgId), listHubAgents(orgId),
+        // An older hub without the milestones route must not blank the whole board.
+        listHubMilestones(orgId).catch(() => [] as HubMilestone[]),
+      ])
+      setCards(nextCards)
+      setAgents(nextAgents)
+      setMilestones(nextMilestones)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof HubApiError ? e.message : 'failed to load the board')
+    }
+  }, [orgId])
 
   useEffect(() => {
     let cancelled = false
-    const load = async () => {
-      try {
-        const [nextCards, nextAgents, nextMilestones] = await Promise.all([
-          listHubCards(orgId), listHubAgents(orgId),
-          // An older hub without the milestones route must not blank the whole board.
-          listHubMilestones(orgId).catch(() => [] as HubMilestone[]),
-        ])
-        if (cancelled) return
-        setCards(nextCards)
-        setAgents(nextAgents)
-        setMilestones(nextMilestones)
-        setError(null)
-      } catch (e) {
-        if (cancelled) return
-        setError(e instanceof HubApiError ? e.message : 'failed to load the board')
-      }
-    }
-    void load()
-    const timer = setInterval(() => void load(), POLL_MS)
+    const tick = () => { if (!cancelled) void load() }
+    tick()
+    const timer = setInterval(tick, POLL_MS)
     return () => { cancelled = true; clearInterval(timer) }
+  }, [load])
+
+  useEffect(() => {
+    listHubBoards(orgId).then(setBoards).catch(() => {})
   }, [orgId])
+
+  /** Run one hub op, surface its refusal verbatim, and re-poll either way. */
+  const act = useCallback(async (op: string, payload: Record<string, unknown>) => {
+    try {
+      await hubOp(orgId, op, payload)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof HubApiError ? e.message : 'the hub refused the change')
+    }
+    await load()
+  }, [orgId, load])
+
+  const defaultBoardId = boards[0]?.id ?? cards?.[0]?.board_id ?? null
 
   const agentByName = new Map((agents ?? []).map((a) => [a.name, a]))
   const cardById = new Map((cards ?? []).map((c) => [c.id, c]))
   const milestoneById = new Map(milestones.map((m) => [m.id, m]))
+  const openCard = openCardId ? cardById.get(openCardId) ?? null : null
 
   if (error && cards === null) {
     return <div className="hub-board-error" role="alert">{error}</div>
@@ -69,41 +84,49 @@ export function HubBoard({ orgId }: { orgId: string }) {
     return <div className="hub-board-loading" aria-label="Loading board">Loading…</div>
   }
 
+  const drop = (lane: HubCardColumn) => (event: React.DragEvent) => {
+    event.preventDefault()
+    const id = draggingId ?? event.dataTransfer.getData('text/hub-card')
+    setDraggingId(null)
+    const card = id ? cardById.get(id) : null
+    if (!card || card.column === lane) return
+    void act('card.move', { card_id: card.id, expected_version: card.version, column: lane })
+  }
+
   return (
     <div className="hub-board">
       <section className="kanban-board" aria-label="Org board">
         {error && <span className="kanban-error" role="alert">{error}</span>}
-        {milestones.filter((m) => m.status === 'open').length > 0 && (
-          <div className="hub-milestone-strip" aria-label="Milestones">
-            {milestones.filter((m) => m.status === 'open').map((m) => {
-              const steps = cards.filter((c) => c.milestone_id === m.id)
-              const done = steps.filter((c) => c.column === 'done').length
-              return (
-                <span key={m.id} className="hub-milestone-chip" title={m.description || m.title}>
-                  <strong>{m.title}</strong>
-                  <span className="hub-milestone-count">{done}/{steps.length}</span>
-                </span>
-              )
-            })}
-          </div>
-        )}
+        <MilestoneStrip milestones={milestones} cards={cards} boardId={defaultBoardId} act={act} />
         <div className="kanban-lanes">
           {LANES.map((lane) => {
             const laneCards = cards.filter((c) => c.column === lane)
             const status = STATUS[lane]
             return (
-              <div key={lane} className={`kanban-lane kanban-lane-${lane}`}>
+              <div key={lane} className={`kanban-lane kanban-lane-${lane}`}
+                onDragOver={(e) => e.preventDefault()} onDrop={drop(lane)}>
                 <div className="kanban-lane-head">
                   <span className={`kanban-lane-dot dot-${lane}`} aria-hidden="true" />
                   <span>{status?.label ?? lane}</span>
                   <span className="kanban-lane-count">{laneCards.length}</span>
                 </div>
                 <div className="kanban-lane-body">
-                  {laneCards.length === 0 && <p className="kanban-empty">No cards</p>}
+                  {lane === 'backlog' && defaultBoardId && (
+                    <NewCardForm boardId={defaultBoardId} act={act} />
+                  )}
+                  {laneCards.length === 0 && lane !== 'backlog' && <p className="kanban-empty">No cards</p>}
                   {laneCards.map((card) => (
                     <HubCardChip key={card.id} card={card}
                       owner={card.owner_agent ? agentByName.get(card.owner_agent) ?? null : null}
-                      milestone={card.milestone_id ? milestoneById.get(card.milestone_id) ?? null : null} />
+                      milestone={card.milestone_id ? milestoneById.get(card.milestone_id) ?? null : null}
+                      dragging={draggingId === card.id}
+                      onOpen={() => setOpenCardId(card.id)}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/hub-card', card.id)
+                        e.dataTransfer.effectAllowed = 'move'
+                        setDraggingId(card.id)
+                      }}
+                      onDragEnd={() => setDraggingId(null)} />
                   ))}
                 </div>
               </div>
@@ -125,6 +148,176 @@ export function HubBoard({ orgId }: { orgId: string }) {
           </ul>
         </section>
       </aside>
+
+      {openCard && (
+        <HubCardDrawer card={openCard} agents={agents} milestones={milestones}
+          act={act} onClose={() => setOpenCardId(null)} />
+      )}
+    </div>
+  )
+}
+
+function MilestoneStrip({ milestones, cards, boardId, act }: {
+  milestones: HubMilestone[]
+  cards: HubCard[]
+  boardId: string | null
+  act: (op: string, payload: Record<string, unknown>) => Promise<void>
+}) {
+  const [adding, setAdding] = useState(false)
+  const [title, setTitle] = useState('')
+  const open = milestones.filter((m) => m.status === 'open')
+  const create = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const trimmed = title.trim()
+    if (!trimmed || !boardId) return
+    setTitle('')
+    setAdding(false)
+    await act('milestone.create', { board_id: boardId, title: trimmed })
+  }
+  return (
+    <div className="hub-milestone-strip" aria-label="Milestones">
+      {open.map((m) => {
+        const steps = cards.filter((c) => c.milestone_id === m.id)
+        const done = steps.filter((c) => c.column === 'done').length
+        return (
+          <span key={m.id} className="hub-milestone-chip" title={m.description || m.title}>
+            <strong>{m.title}</strong>
+            <span className="hub-milestone-count">{done}/{steps.length}</span>
+          </span>
+        )
+      })}
+      {adding ? (
+        <form className="hub-milestone-add" onSubmit={create}>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus
+            className="hub-inline-input" placeholder="Milestone title" aria-label="Milestone title" />
+          <button type="submit" className="btn primary" disabled={!title.trim()}>Add</button>
+          <button type="button" className="btn ghost" onClick={() => { setAdding(false); setTitle('') }}>Cancel</button>
+        </form>
+      ) : (
+        <button type="button" className="hub-milestone-chip hub-milestone-new"
+          disabled={!boardId} onClick={() => setAdding(true)}>+ milestone</button>
+      )}
+    </div>
+  )
+}
+
+function NewCardForm({ boardId, act }: {
+  boardId: string
+  act: (op: string, payload: Record<string, unknown>) => Promise<void>
+}) {
+  const [open, setOpen] = useState(false)
+  const [title, setTitle] = useState('')
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const trimmed = title.trim()
+    if (!trimmed) return
+    setTitle('')
+    setOpen(false)
+    await act('card.create', { board_id: boardId, title: trimmed })
+  }
+  if (!open) {
+    return (
+      <button type="button" className="hub-new-card" onClick={() => setOpen(true)}>+ New card</button>
+    )
+  }
+  return (
+    <form className="hub-new-card-form" onSubmit={submit}>
+      <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus
+        className="hub-inline-input" placeholder="Card title" aria-label="New card title"
+        onKeyDown={(e) => { if (e.key === 'Escape') { setOpen(false); setTitle('') } }} />
+      <div className="hub-new-card-actions">
+        <button type="submit" className="btn primary" disabled={!title.trim()}>Add</button>
+        <button type="button" className="btn ghost" onClick={() => { setOpen(false); setTitle('') }}>Cancel</button>
+      </div>
+    </form>
+  )
+}
+
+/**
+ * Edit surface for one shared card. Saves address the version the drawer was showing —
+ * if a teammate (or their agent) got there first, the hub 409s with its own message and
+ * the next poll shows their change instead of silently overwriting it.
+ */
+function HubCardDrawer({ card, agents, milestones, act, onClose }: {
+  card: HubCard
+  agents: HubAgent[]
+  milestones: HubMilestone[]
+  act: (op: string, payload: Record<string, unknown>) => Promise<void>
+  onClose: () => void
+}) {
+  const [title, setTitle] = useState(card.title)
+  const [description, setDescription] = useState(card.description)
+  const [claimAs, setClaimAs] = useState('')
+
+  const dirty = title.trim() !== card.title || description !== card.description
+  const save = async () => {
+    if (!dirty || !title.trim()) return
+    await act('card.update', {
+      card_id: card.id, expected_version: card.version,
+      title: title.trim(), description,
+    })
+  }
+  const claim = async () => {
+    const agent = claimAs.trim()
+    if (!agent) return
+    setClaimAs('')
+    await act('card.claim', { card_id: card.id, agent })
+  }
+  const setMilestone = async (milestoneId: string) => {
+    await act('card.milestone', {
+      card_id: card.id, expected_version: card.version,
+      milestone_id: milestoneId || null,
+    })
+  }
+  const move = async (column: HubCardColumn) => {
+    if (column === card.column) return
+    await act('card.move', { card_id: card.id, expected_version: card.version, column })
+  }
+
+  return (
+    <div className="hub-drawer-scrim" onClick={onClose}>
+      <aside className="hub-drawer" aria-label={`Card #${card.number}`} onClick={(e) => e.stopPropagation()}>
+        <header className="hub-drawer-head">
+          <span className="kanban-card-id">#{card.number}</span>
+          <button type="button" className="hub-drawer-close" aria-label="Close" onClick={onClose}>×</button>
+        </header>
+        <label className="hub-drawer-label">Title
+          <input className="hub-inline-input" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <label className="hub-drawer-label">Description
+          <textarea className="hub-inline-input hub-drawer-desc" rows={5}
+            value={description} onChange={(e) => setDescription(e.target.value)} />
+        </label>
+        {dirty && <button type="button" className="btn primary" onClick={() => void save()}>Save</button>}
+        <label className="hub-drawer-label">Column
+          <select className="hub-inline-input" value={card.column}
+            onChange={(e) => void move(e.target.value as HubCardColumn)}>
+            {LANES.map((lane) => <option key={lane} value={lane}>{STATUS[lane]?.label ?? lane}</option>)}
+          </select>
+        </label>
+        <label className="hub-drawer-label">Milestone
+          <select className="hub-inline-input" value={card.milestone_id ?? ''}
+            onChange={(e) => void setMilestone(e.target.value)}>
+            <option value="">— none —</option>
+            {milestones.map((m) => <option key={m.id} value={m.id}>{m.title}</option>)}
+          </select>
+        </label>
+        <div className="hub-drawer-claim">
+          <span className="hub-drawer-label">Owner: {card.owner_agent ?? 'unclaimed'}</span>
+          <div className="hub-drawer-claim-row">
+            <input className="hub-inline-input" list="hub-agent-names" value={claimAs}
+              onChange={(e) => setClaimAs(e.target.value)} placeholder="Assign to agent…"
+              aria-label="Assign to agent" />
+            <datalist id="hub-agent-names">
+              {agents.map((a) => <option key={a.id} value={a.name} />)}
+            </datalist>
+            <button type="button" className="btn" disabled={!claimAs.trim()} onClick={() => void claim()}>Claim</button>
+          </div>
+        </div>
+        {card.paths.length > 0 && (
+          <p className="hub-drawer-paths" title={card.paths.join(', ')}>paths: {card.paths.join(', ')}</p>
+        )}
+      </aside>
     </div>
   )
 }
@@ -132,12 +325,10 @@ export function HubBoard({ orgId }: { orgId: string }) {
 /**
  * The org's projects and boards, with a create form.
  *
- * Nothing in the product could create either one before this: every write op requires a
- * `board_id` that already exists, so a customer who paid had nothing to point a daemon at.
- * A new org gets one automatically (the Clerk `organization.created` webhook seeds it), and
- * this is how a member sees that board's id — which their daemon needs verbatim — and adds
- * more. Creating is a write, so a never-subscribed or suspended org gets the server's own
- * refusal text here rather than a generic error.
+ * A new org gets one automatically (the Clerk `organization.created` webhook seeds it),
+ * and this is where a member sees that board's id — which their daemon needs verbatim —
+ * and adds more. Creating is a write, so a never-subscribed or suspended org gets the
+ * server's own refusal text here rather than a generic error.
  */
 function HubBoardsPanel({ orgId }: { orgId: string }) {
   const [boards, setBoards] = useState<HubBoardSummary[] | null>(null)
@@ -200,12 +391,21 @@ function HubBoardsPanel({ orgId }: { orgId: string }) {
   )
 }
 
-function HubCardChip({ card, owner, milestone }: {
-  card: HubCard; owner: HubAgent | null; milestone: HubMilestone | null
+function HubCardChip({ card, owner, milestone, dragging, onOpen, onDragStart, onDragEnd }: {
+  card: HubCard
+  owner: HubAgent | null
+  milestone: HubMilestone | null
+  dragging: boolean
+  onOpen: () => void
+  onDragStart: (event: React.DragEvent) => void
+  onDragEnd: () => void
 }) {
   const ownerWorking = owner !== null && hubAgentActivity(owner) === 'working'
   return (
-    <article className="kanban-card">
+    <article className={`kanban-card${dragging ? ' dragging' : ''}`} draggable
+      onDragStart={onDragStart} onDragEnd={onDragEnd}
+      onClick={onOpen} role="button" tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}>
       <header>
         <span className="kanban-card-id">#{card.number}</span>
         {milestone && <span className="hub-card-milestone" title={milestone.title}>{milestone.title}</span>}

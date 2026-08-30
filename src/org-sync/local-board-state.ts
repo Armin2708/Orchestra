@@ -757,18 +757,28 @@ export function ensureLocalOrgBoard(
   db: Database.Database,
   orgId: string,
   projectPath: string,
+  orgName?: string,
 ): number {
   installLocalBoardSyncSchema(db)
+  const displayName = orgName?.trim() || `Organization ${orgId}`
   return db.transaction(() => {
-    const mapped = db.prepare(`SELECT board.id FROM org_sync_boards mapping
+    const mapped = db.prepare(`SELECT board.id, board.name FROM org_sync_boards mapping
       JOIN boards board ON board.id=mapping.local_board_id
-      WHERE mapping.org_id=?`).get(orgId) as { id: number } | undefined
-    if (mapped) return mapped.id
+      WHERE mapping.org_id=?`).get(orgId) as { id: number; name: string } | undefined
+    if (mapped) {
+      // Boards created before the credential carried the org's name are stuck showing
+      // the raw id in the project picker. Adopt the name — but only over the default
+      // pattern, never over something a person renamed deliberately.
+      if (mapped.name === `Organization ${orgId}` && mapped.name !== displayName) {
+        db.prepare('UPDATE boards SET name=? WHERE id=?').run(displayName, mapped.id)
+      }
+      return mapped.id
+    }
 
     const existing = db.prepare('SELECT id FROM boards WHERE project_path=?')
       .get(projectPath) as { id: number } | undefined
     const boardId = existing?.id ?? Number(db.prepare(`INSERT INTO boards (project_path, name)
-      VALUES (?, ?)`).run(projectPath, `Organization ${orgId}`).lastInsertRowid)
+      VALUES (?, ?)`).run(projectPath, displayName).lastInsertRowid)
     db.prepare(`INSERT INTO org_sync_boards (org_id, local_board_id) VALUES (?, ?)
       ON CONFLICT(org_id) DO UPDATE SET local_board_id=excluded.local_board_id`).run(orgId, boardId)
     return boardId

@@ -223,6 +223,16 @@ export async function listHubMilestones(orgId: string): Promise<HubMilestone[]> 
   return body.milestones
 }
 
+/**
+ * One write through the hub's event-sourced ops endpoint — the same channel every
+ * daemon uses, so a browser edit and a machine edit are indistinguishable to the org
+ * (same events, same optimistic versioning, same 409 on a stale expected_version).
+ */
+export async function hubOp<T>(orgId: string, op: string, payload: Record<string, unknown>): Promise<T> {
+  const body = await hubFetch('POST', `/orgs/${orgId}/ops`, { op, payload }) as { result: T }
+  return body.result
+}
+
 export async function getHubEntitlements(orgId: string): Promise<HubEntitlements> {
   return await hubFetch('GET', `/orgs/${orgId}/entitlements`) as HubEntitlements
 }
