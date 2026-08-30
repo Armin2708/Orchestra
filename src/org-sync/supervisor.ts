@@ -36,7 +36,12 @@ export interface SuperviseDaemonOrgSyncOptions extends StartDaemonOrgSyncOptions
   start?: (options: StartDaemonOrgSyncOptions) => Promise<DaemonOrgSyncHandle | null>
   /** Coalescing window for filesystem events; the credential is written temp-file-then-rename. */
   debounceMs?: number
+  /** How long to wait for a loop to stop before abandoning it and continuing. */
+  stopTimeoutMs?: number
 }
+
+// Never let a hub URL, an org id, or anything else from a credential reach a log line.
+const safeMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 // Restart only when the credential actually differs — a rewrite with identical contents
 // must not interrupt a healthy loop.
@@ -62,26 +67,59 @@ export async function superviseDaemonOrgSync(
   // Reloads are serialised: a rename storm must never run two starts concurrently.
   let queue: Promise<void> = Promise.resolve()
 
+  // A stuck loop must not take the supervisor with it. Reloads are serialised, so an
+  // awaited stop() that never settles would leave every later join queued behind it
+  // forever — the daemon would disconnect on `org leave` and never come back.
+  const stopHandle = async (target: DaemonOrgSyncHandle): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        target.stop(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            output('org-sync did not stop within 10s; abandoning the old loop and continuing')
+            resolve()
+          }, options.stopTimeoutMs ?? 10_000)
+          timer.unref?.()
+        }),
+      ])
+    } catch (error) {
+      output(`org-sync could not stop cleanly: ${safeMessage(error)}`)
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   const applyCredential = async (): Promise<void> => {
     if (stopped) return
     const credential = await load().catch(() => null)
     const next = fingerprint(credential)
     if (next === current) return
-    if (handle) {
-      await handle.stop().catch((error) => output(`org-sync could not stop cleanly: ${String(error)}`))
-      handle = null
-      if (!credential) output('org-sync off (left the organization)')
-    }
+    // Claim the new fingerprint up front so concurrent events coalesce, but drop the
+    // claim on any failure below — a poisoned fingerprint would make every later
+    // reload a no-op and strand the daemon offline.
     current = next
     currentOrgId = credential?.orgId ?? null
-    if (!credential) {
-      // Only the boot-time "nothing joined" line is worth printing; later no-ops are silent.
-      if (!announcedOff) { output('org-sync off (no organization joined)'); announcedOff = true }
-      return
+    try {
+      if (handle) {
+        const previous = handle
+        handle = null
+        await stopHandle(previous)
+        if (!credential) output('org-sync off (left the organization)')
+      }
+      if (!credential) {
+        // Only the boot-time "nothing joined" line is worth printing; later no-ops are silent.
+        if (!announcedOff) { output('org-sync off (no organization joined)'); announcedOff = true }
+        return
+      }
+      announcedOff = true
+      handle = await start({ ...options, home, output, loadCredential: async () => credential })
+      if (!handle) current = null
+    } catch (error) {
+      current = null
+      currentOrgId = null
+      output(`org-sync could not connect: ${safeMessage(error)}; it will retry on the next credential change`)
     }
-    announcedOff = true
-    handle = await start({ ...options, home, output, loadCredential: async () => credential })
-    if (!handle) current = null
   }
 
   const reload = (): Promise<void> => {
@@ -120,8 +158,11 @@ export async function superviseDaemonOrgSync(
       watcher?.close()
       watcher = undefined
       await queue.catch(() => undefined)
-      await handle?.stop()
-      handle = null
+      if (handle) {
+        const previous = handle
+        handle = null
+        await stopHandle(previous)
+      }
     },
   }
 }

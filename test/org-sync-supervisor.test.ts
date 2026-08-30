@@ -125,6 +125,62 @@ describe('superviseDaemonOrgSync', () => {
     await supervisor.stop()
   })
 
+  // Found on a real daemon: `org leave` dropped the connection and no later join ever
+  // reconnected, because the awaited stop() never settled and every reload queued behind it.
+  it('rejoins even when the previous loop never finishes stopping', async () => {
+    const started: string[] = []
+    const start = async (opts: StartDaemonOrgSyncOptions): Promise<DaemonOrgSyncHandle | null> => {
+      const loaded = await opts.loadCredential!()
+      if (!loaded) return null
+      started.push(loaded.orgId)
+      return {
+        state: () => 'live',
+        // a loop wedged inside an un-abortable request
+        stop: () => new Promise<void>(() => {}),
+      }
+    }
+    await saveOrgCredential(credential('org_a'), home)
+    const supervisor = await superviseDaemonOrgSync({
+      home, watch: false, start, output: () => {}, stopTimeoutMs: 20,
+    })
+
+    await clearOrgCredential(home)
+    await supervisor.reload()
+    expect(supervisor.state()).toBe('off')
+
+    await saveOrgCredential(credential('org_b'), home)
+    await supervisor.reload()
+
+    expect(started).toEqual(['org_a', 'org_b'])
+    expect(supervisor.state()).toBe('live')
+    await supervisor.stop()
+  })
+
+  it('retries after a failed start instead of stranding the daemon offline', async () => {
+    const attempts: string[] = []
+    let failNext = true
+    const start = async (opts: StartDaemonOrgSyncOptions): Promise<DaemonOrgSyncHandle | null> => {
+      const loaded = await opts.loadCredential!()
+      attempts.push(loaded!.orgId)
+      if (failNext) { failNext = false; throw new Error('hub unreachable') }
+      return { state: () => 'live', stop: async () => {} }
+    }
+    const lines: string[] = []
+    await saveOrgCredential(credential('org_a'), home)
+    const supervisor = await superviseDaemonOrgSync({
+      home, watch: false, start, output: (line) => lines.push(line),
+    })
+
+    expect(supervisor.state()).toBe('off')
+    expect(lines.some((line) => line.includes('could not connect'))).toBe(true)
+
+    // the same credential must be retried — a poisoned fingerprint would no-op here
+    await supervisor.reload()
+    expect(attempts).toEqual(['org_a', 'org_a'])
+    expect(supervisor.state()).toBe('live')
+    await supervisor.stop()
+  })
+
   it('stops the loop and the watcher on shutdown', async () => {
     await saveOrgCredential(credential('org_a'), home)
     const rec = recordingStart()
