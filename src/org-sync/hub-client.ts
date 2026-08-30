@@ -185,8 +185,15 @@ export class HubClient {
     const detail = typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`
     if (response.status === 409) throw new HubConflictError(detail, body?.current)
     if (response.status === 401 || response.status === 403) {
+      // Report the hub's own reason. The hub already decides what is safe to say: genuine
+      // token failures collapse to a deliberately generic body (INVALID_TOKEN_BODY in
+      // src/hub/server.ts), while refusals like "this org has no subscription" are
+      // actionable on purpose. Substituting a token theory here told an operator to rejoin
+      // with a fresh device token to fix an unpaid subscription — advice no token can act on.
       throw new HubRequestError(
-        'hub authorization failed: the token may be invalid, revoked, or for another organization',
+        body?.error
+          ? detail
+          : 'hub authorization failed: the token may be invalid, revoked, or for another organization',
         response.status,
       )
     }

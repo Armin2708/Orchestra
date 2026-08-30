@@ -81,7 +81,7 @@ describe('HubClient', () => {
 
   it('distinguishes auth, ordinary client, and retryable server errors', async () => {
     for (const [status, ErrorType, message] of [
-      [403, HubRequestError, 'token may be invalid, revoked, or for another organization'],
+      [403, HubRequestError, 'device token is not valid'],
       [400, HubRequestError, 'bad request'],
       [503, HubRetryableError, 'temporarily unavailable'],
     ] as const) {
@@ -92,8 +92,32 @@ describe('HubClient', () => {
       const failure = client.get('boards')
       await expect(failure).rejects.toBeInstanceOf(ErrorType)
       await expect(failure).rejects.toMatchObject({ retryable: status >= 500, status })
-      await expect(failure).rejects.toThrow(status === 403 ? 'token may be invalid' : message)
+      await expect(failure).rejects.toThrow(message)
     }
+  })
+
+  /**
+   * Reported from a real daemon: an org with no subscription made the hub answer 403 with
+   * an actionable message, and the client replaced it with a token theory — telling the
+   * operator to rejoin with a fresh device token to fix an unpaid subscription.
+   */
+  it('surfaces the hub\'s own reason for a 403 rather than guessing about the token', async () => {
+    const reason = 'this org has no subscription — writes are disabled until one is started.'
+    handler = (_request, response) => {
+      response.writeHead(403, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: reason, code: 'forbidden' }))
+    }
+
+    const failure = client.get('boards')
+
+    await expect(failure).rejects.toThrow(reason)
+    await expect(failure).rejects.not.toThrow('token may be invalid')
+  })
+
+  it('falls back to the token wording when a 403 carries no reason at all', async () => {
+    handler = (_request, response) => { response.writeHead(403).end() }
+
+    await expect(client.get('boards')).rejects.toThrow('token may be invalid, revoked, or for another organization')
   })
 
   it('parses split SSE frames in order and ignores ping comments', async () => {
