@@ -144,12 +144,16 @@ export function buildHubServer(sql: HubSqlPool, opts: HubServerOptions = {}): Fa
     reply.header('cache-control', 'no-store')
     if (!request.url.startsWith('/api/v1/hub/')) return
 
-    // The three CLI login handshake routes are the only unauthenticated surface on the hub.
-    // They have to be: the machine calling them has no credential yet — that is the point of
-    // logging in. What protects them instead is that starting a request grants nothing, and
-    // exchanging one requires both a code only an approving human's browser ever saw and a
-    // verifier that never left the CLI. See src/hub/cli-auth.ts.
-    if (request.url.startsWith('/api/v1/hub/cli/auth/')) return
+    // `start` and `exchange` are the only unauthenticated surface on the hub. They have to
+    // be: the machine calling them has no credential yet — that is the point of logging in.
+    // What protects them instead is that starting a request grants nothing, and exchanging
+    // one requires both a code only an approving human's browser ever saw and a verifier
+    // that never left the CLI. See src/hub/cli-auth.ts.
+    //
+    // `approve` is deliberately NOT in this list. It is the step where a person vouches for
+    // a machine, so it must carry a Clerk session and fall through to the checks below.
+    if (request.url.startsWith('/api/v1/hub/cli/auth/start')
+      || request.url.startsWith('/api/v1/hub/cli/auth/exchange')) return
 
     const header = request.headers.authorization
     const token = typeof header === 'string' && header.startsWith('Bearer ')

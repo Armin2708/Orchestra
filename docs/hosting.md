@@ -277,9 +277,29 @@ projects in this environment, and holds no Clerk secret key or Stripe restricted
 not treat anything below as verified — it is a checklist to execute once those accounts exist,
 written to be followed literally, with the expected result at each step.
 
-Daemons join with `orchestra org join`. The command verifies the one-time device token before
-storing it in `ORCHESTRA_HOME/org.json` with mode `0600`, then starts (or restarts) the local
-daemon so the SSE sync loop is live immediately. Prefer `--token-stdin`: the token does not enter
+Connecting a machine takes two commands and no copy-pasting:
+
+```bash
+orchestra login          # opens the browser, you approve, the CLI is signed in
+orchestra org connect    # pick an organization; the running daemon connects
+```
+
+`login` uses a loopback redirect with PKCE: the CLI opens `<web>/cli`, you approve as a
+signed-in member, and the browser hands a single-use code back to a listener on `127.0.0.1`.
+The verifier that completes the exchange never leaves the machine, so an intercepted code is
+useless. The result is a CLI token in `ORCHESTRA_HOME/cli-auth.json` (mode `0600`) scoped to
+exactly two things — list your orgs, and mint a device token for one you belong to. It cannot
+read or write any organization's work.
+
+`org connect` mints the device token, writes `ORCHESTRA_HOME/org.json` (mode `0600`), and waits
+for the daemon's sync loop to go live. **No restart** — the daemon watches the credential
+(`src/org-sync/supervisor.ts`), so hired agents keep running.
+
+`orchestra whoami` shows who is signed in; `orchestra logout` forgets the sign-in on this
+machine without revoking it server-side.
+
+**Headless machines** (ssh, CI, no browser) still use the manual path: mint a token in the
+hosted UI and run `orchestra org join --hub … --org … --token-stdin`. The token does not enter
 shell history and is never printed by Orchestra.
 
 1. **Sign up.** Open the Vercel URL. Sign up via Clerk's hosted UI.
@@ -312,17 +332,22 @@ shell history and is never printed by Orchestra.
    *Expected:* Plan shows "Cloud"; seat/agent meters reflect `cloud_base_monthly`'s fixed 3
    included seats (`deriveQuantities` in `billing.ts`).
 
-5. **Join a daemon.** In the hosted UI, choose **Connect a daemon**, name the device, and generate
-   its one-time token. Then run this on the machine being connected:
+5. **Connect a daemon.** On the machine being connected:
    ```bash
-   orchestra org join \
-     --hub "https://<railway-url>" \
-     --org "<orgId>" \
-     --token-stdin
+   orchestra login --hub "https://<railway-url>" --web "https://<vercel-url>"
+   orchestra org connect
+   ```
+   *Expected:* the browser opens `<vercel-url>/cli` showing "Connect <machine>?"; approving
+   returns you to the terminal with `signed in as <email>`. `org connect` then prints
+   `connected to <org>` once the daemon's sync loop is live. Nothing prints a token.
+
+   For a machine with no browser, mint a token in the hosted UI under **Connect a daemon** and
+   use the manual path instead:
+   ```bash
+   orchestra org join --hub "https://<railway-url>" --org "<orgId>" --token-stdin
    ```
    Paste the token on stdin and finish with EOF (Ctrl-D on macOS/Linux, Ctrl-Z then Enter on
-   Windows). *Expected:* `joined <orgId> at <hub> as <device>`. A rejected, revoked, or wrong-org
-   token is refused before anything is saved. The command never prints the token.
+   Windows). A rejected, revoked, or wrong-org token is refused before anything is saved.
 
 6. **Verify the connection.**
    ```bash

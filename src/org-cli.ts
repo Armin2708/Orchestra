@@ -162,7 +162,7 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
   const chooseOrg = deps.chooseOrg ?? promptForOrg
   const connectTimeoutMs = deps.connectTimeoutMs ?? 20_000
   const readToken = deps.readToken ?? tokenFromStdin
-  const deviceName = deps.deviceName ?? os.hostname
+  const deviceName = deps.deviceName ?? (() => os.hostname().split('.')[0])
   const output = deps.output ?? console.log
   const spin = deps.spinner ?? ttySpinner(output)
 

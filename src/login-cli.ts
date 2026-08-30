@@ -93,7 +93,8 @@ export function registerLoginCommands(program: Command, deps: LoginCliDeps = {})
   const open = deps.openBrowser ?? openInBrowser
   const output = deps.output ?? console.log
   const timeoutMs = deps.timeoutMs ?? 180_000
-  const label = deps.deviceLabel ?? (() => os.hostname().replace(/\.local$/, ''))
+  // hostnames arrive fully qualified (mac.home, mac.local) — the machine name is the useful part
+  const label = deps.deviceLabel ?? (() => os.hostname().split('.')[0])
 
   program.command('login')
     .description('sign in to Orchestra Cloud in your browser')

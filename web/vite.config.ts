@@ -10,16 +10,22 @@ import react from '@vitejs/plugin-react'
 // VITE_CLERK_PUBLISHABLE_KEY / VITE_HUB_BASE_URL and hand the daemon a bundle that
 // blocks on Clerk behind the daemon's `script-src 'self'` CSP.
 
-// The dev server always resolves "/" to index.html, so without this `vite --mode cloud`
-// would serve the local board at "/" while the cloud build serves the cloud app there.
-// Rewriting keeps dev honest about which product it is running.
-function serveCloudEntryAtRoot(): Plugin {
+// The dev server always resolves a page request to index.html, so without this
+// `vite --mode cloud` would serve the local board while the cloud build serves the cloud
+// app — and /cli, the login approval page, would be the wrong app entirely.
+//
+// This mirrors what Vercel's SPA rewrite does in production: every page route renders the
+// cloud entry. Vite internals and anything that looks like a file are left alone.
+function serveCloudEntryForPages(): Plugin {
+  const passThrough = /^\/(?:@|src\/|node_modules\/|__|favicon)/
   return {
     name: 'orchestra-cloud-entry',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use((req, _res, next) => {
-        if (req.url === '/' || req.url?.startsWith('/?')) req.url = '/cloud.html'
+        const path = (req.url ?? '/').split('?')[0]
+        const isPage = !passThrough.test(path) && !/\.[a-zA-Z0-9]+$/.test(path)
+        if (isPage) req.url = '/cloud.html'
         next()
       })
     },
@@ -27,7 +33,7 @@ function serveCloudEntryAtRoot(): Plugin {
 }
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), ...(mode === 'cloud' ? [serveCloudEntryAtRoot()] : [])],
+  plugins: [react(), ...(mode === 'cloud' ? [serveCloudEntryForPages()] : [])],
   server: { proxy: { '/api': 'http://localhost:4750' } },
   build: {
     rollupOptions: { input: mode === 'cloud' ? 'cloud.html' : 'index.html' },
