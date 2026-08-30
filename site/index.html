@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Orchestra — run a team of coding agents that coordinate</title>
-<meta name="description" content="Orchestra is a live board where Claude Code and Codex agents work as a team — mail, memory, and human-gated review — while you conduct.">
+<meta name="description" content="Orchestra is a live board where Claude Code and Codex agents work as a team — mail, memory, and human-gated review — while you orchestrate.">
 <meta name="theme-color" content="#0a0c11">
 <meta property="og:title" content="Orchestra — run a team of coding agents that coordinate">
-<meta property="og:description" content="A live board where Claude Code and Codex agents work as a team while you conduct.">
+<meta property="og:description" content="A live board where Claude Code and Codex agents work as a team while you orchestrate.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="assets/orchestra-social-card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Orchestra — you conduct, agents play">
+<meta property="og:image:alt" content="Orchestra — you orchestrate, agents play">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="icon" type="image/svg+xml" sizes="any" href="assets/orchestra-icon.svg">
-<link rel="icon" type="image/png" sizes="32x32" href="assets/orchestra-icon-32.png">
+<link rel="icon" type="image/svg+xml" sizes="any" href="assets/orchestra-icon-dark.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/orchestra-icon-dark-32.png">
 <link rel="apple-touch-icon" sizes="192x192" href="assets/orchestra-icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,7 +58,7 @@
   }
   .nav-cta:hover { filter: brightness(1.1); }
 
-  /* ── hero: mesh + grid + lottie constellation ────────────── */
+  /* ── hero: mesh + grid ─────────────────────────────── */
   .hero { position: relative; overflow: hidden; }
   .grid, .noise, .scan { position: absolute; inset: 0; pointer-events: none; }
   .scan {
@@ -76,11 +76,6 @@
     opacity: .035;
   }
   .digits { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .85; }
-  /* lottie network layers, one each side of the copy */
-  .lottie-net { position: absolute; z-index: 1; width: 30vw; max-width: 430px; opacity: .85; pointer-events: none; }
-  .net-l { left: -2vw; top: 90px; }
-  .net-r { right: -2vw; top: 160px; transform: scaleX(-1); }
-  @media (max-width: 1000px) { .lottie-net { display: none; } }
 
   .hero-inner { position: relative; z-index: 2; max-width: 1180px; margin: 0 auto; padding: 108px 28px 0; text-align: center; }
   .hero-mark { display: block; width: clamp(112px, 13vw, 148px); height: auto; margin: 0 auto; }
@@ -300,14 +295,12 @@
   <div class="scan" aria-hidden="true"></div>
   <div class="noise" aria-hidden="true"></div>
   <canvas class="digits" id="digits-hero" aria-hidden="true"></canvas>
-  <div class="lottie-net net-l" id="lottie-left" aria-hidden="true"></div>
-  <div class="lottie-net net-r" id="lottie-right" aria-hidden="true"></div>
 
   <div class="hero-inner">
     <img class="hero-mark" src="assets/orchestra-mark-reversed.svg" alt="Orchestra" width="148" height="93">
     <h1>Run a team of coding agents that coordinate.</h1>
     <p class="lede">A live board where Claude Code and Codex agents work together — mail, memory,
-    and review gates — across every terminal you open. You conduct; they play.</p>
+    and review gates — across every terminal you open. You orchestrate; they play.</p>
     <div class="cta-row">
       <a class="btn-main" href="#install">Get Orchestra <span aria-hidden="true">→</span></a>
       <a class="btn-ghost" href="https://github.com/Armin2708/Orchestra">Star on GitHub</a>
@@ -434,7 +427,7 @@
     <div class="cols">
       <div class="sec-head">
         <p class="eyebrow">Remote</p>
-        <h2>Conduct from anywhere.</h2>
+        <h2>Orchestrate from anywhere.</h2>
         <p class="sub">The board runs on your machine and pairs to your phone over a private tunnel —
         scoped sessions that can observe, message, and approve. No cloud in the middle, no code leaving
         your box.</p>
@@ -491,7 +484,7 @@
 <footer>
   <div class="foot-grid">
     <div>
-      <span class="foot-brand"><span><img src="assets/orchestra-mark-reversed.svg" alt="" width="38" height="24" aria-hidden="true">orchestra</span><small>You conduct, agents play.<br>© 2026</small></span>
+      <span class="foot-brand"><span><img src="assets/orchestra-mark-reversed.svg" alt="" width="38" height="24" aria-hidden="true">orchestra</span><small>You orchestrate, agents play.<br>© 2026</small></span>
     </div>
     <div>
       <h4>Product</h4>
@@ -522,18 +515,9 @@
   document.querySelectorAll('.reveal').forEach((el) => observer.observe(el));
   setTimeout(() => document.querySelectorAll('.reveal').forEach((el) => el.classList.add('in')), 1200);
 
-  // lottie: hero network + product demos (screenshots remain the reduced-motion/no-http fallback)
+  // lottie product demos (screenshots remain the reduced-motion/no-http fallback)
   window.addEventListener('load', async () => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !window.lottie) return;
-    try {
-      const data = await (await fetch('assets/network.json')).json();
-      for (const id of ['lottie-left', 'lottie-right']) {
-        lottie.loadAnimation({
-          container: document.getElementById(id),
-          renderer: 'svg', loop: true, autoplay: true, animationData: data,
-        });
-      }
-    } catch (error) { console.warn('lottie: serve the site over http to load network.json', error); }
     for (const frame of document.querySelectorAll('.frame.demo')) {
       try {
         const data = await (await fetch(frame.dataset.demo)).json();
