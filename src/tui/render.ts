@@ -39,9 +39,15 @@ export interface TuiState {
 /** The list occupies these 1-based terminal rows; clicks map back through this. */
 export const listRegion = (rows: number) => ({ top: 4, height: Math.max(1, rows - 5) })
 
+// Board text is written by agents and other org members — untrusted for terminal
+// purposes. Strip every C0/C1 control (ESC included, newline aside) at the render
+// boundary so a hostile card title cannot inject escape sequences into the operator's
+// terminal (screen rewriting, title spoofing, clipboard writes on some emulators).
+const scrub = (text: string): string => text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+
 const truncate = (text: string, width: number): string => {
   if (width <= 0) return ''
-  const flat = text.replace(/\s+/g, ' ')
+  const flat = scrub(text).replace(/\s+/g, ' ')
   return flat.length <= width ? flat : `${flat.slice(0, Math.max(0, width - 1))}…`
 }
 
@@ -67,7 +73,7 @@ export function clip(line: string, cols: number): string {
 
 export function renderFrame(state: TuiState, rows: number, cols: number): string[] {
   const lines: string[] = []
-  const cloud = state.cloud === 'live' ? `${green('●')} cloud` : state.cloud ? dim(`○ ${state.cloud}`) : dim('○ local')
+  const cloud = state.cloud === 'live' ? `${green('●')} cloud` : state.cloud ? dim(`○ ${truncate(state.cloud, 16)}`) : dim('○ local')
   lines.push(` ${bold('orchestra')} ${dim('·')} ${bold(truncate(state.boardName, Math.max(8, cols - 40)))} ${dim('·')} ${state.agents.length} agents ${dim('·')} ${cloud}`)
 
   const tab = (name: 'board' | 'inbox', label: string) =>
@@ -95,7 +101,7 @@ function renderCards(state: TuiState, height: number, cols: number): string[] {
     const active = i === state.selected
     const id = pad(`#${c.id}`, 6)
     const col = pad(c.column, 12)
-    const owner = c.owner ?? 'unowned'
+    const owner = truncate(c.owner ?? 'unowned', 24)
     const title = truncate(c.title, Math.max(10, cols - 6 - 12 - owner.length - 8))
     const marker = active ? accent('❯ ') : '  '
     rows.push(` ${marker}${accent(id)}${columnColor(col)}${active ? bold(title) : title} ${dim(`(${owner})`)}`)
@@ -121,7 +127,7 @@ function renderDetail(card: TuiCard, height: number, cols: number): string[] {
   const width = Math.max(20, cols - 4)
   const rows: string[] = [
     ` ${accent(`#${card.id}`)} ${bold(truncate(card.title, width - 8))}`,
-    ` ${dim('column')} ${columnColor(card.column)}   ${dim('owner')} ${card.owner ?? 'unowned'}`,
+    ` ${dim('column')} ${columnColor(truncate(card.column, 16))}   ${dim('owner')} ${truncate(card.owner ?? 'unowned', 24)}`,
     ` ${dim('paths')} ${truncate(card.paths.join(', ') || '-', width - 8)}`,
     '',
   ]
@@ -132,7 +138,7 @@ function renderDetail(card: TuiCard, height: number, cols: number): string[] {
 
 function wrapText(text: string, width: number): string[] {
   const out: string[] = []
-  for (const paragraph of text.split('\n')) {
+  for (const paragraph of scrub(text.replace(/\r\n?/g, '\n')).split('\n')) {
     let line = ''
     for (const word of paragraph.split(/\s+/)) {
       if (line && line.length + word.length + 1 > width) { out.push(line); line = word }

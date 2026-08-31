@@ -62,6 +62,39 @@ describe('tui renderFrame', () => {
   })
 })
 
+describe('tui escape injection', () => {
+  it('strips control characters from board-sourced text before it reaches the terminal', () => {
+    const hostile = state({
+      cards: [{
+        id: 1,
+        column: 'review',
+        title: 'evil \u001b[2J\u001b]0;spoofed\u0007 title',
+        owner: 'own\u001ber',
+        paths: ['ab'],
+        description: 'body \u001b[8m hidden \u0007',
+      }],
+      questions: [{ id: 2, from: 'a\u001bgent', to: 'all', body: 'ping \u001b[2J' }],
+      boardName: 'board\u001b[31m',
+      status: 'oops \u001b[2J',
+    })
+    // Frames render with styling disabled here (non-TTY), so any ESC that survives came
+    // from the hostile input — the exact bytes the scrub exists to remove.
+    for (const view of [
+      renderFrame(hostile, 12, 80),
+      renderFrame({ ...hostile, tab: 'inbox' as const }, 12, 80),
+      renderFrame({ ...hostile, detail: hostile.cards[0] }, 12, 80),
+    ]) {
+      const frame = view.join('\n')
+      expect(frame).not.toContain('\u001b')
+      expect(frame).not.toContain('\u0007')
+      expect(frame).not.toContain('\u009b')
+    }
+    // Printable text survives the scrub — only the control bytes are removed.
+    expect(renderFrame(hostile, 12, 80).join('\n')).toContain('evil')
+    expect(renderFrame({ ...hostile, tab: 'inbox' as const }, 12, 80).join('\n')).toContain('ping')
+  })
+})
+
 describe('tui input decoding', () => {
   it('decodes arrows, enter, tab, quit, and ctrl-c', () => {
     expect(decode('\u001b[A')).toEqual([{ name: 'up', ctrl: false }])
