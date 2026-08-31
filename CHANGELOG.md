@@ -1,7 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-08-31
 
+- **Interactive terminal session** — bare `orchestra` at a TTY now opens a
+  full-screen app in the alternate screen buffer: a Home landing with the
+  ORCHESTRA wordmark, an animated pet, and simple status; the board list
+  behind a Board tab (with inbox); a Logs tab with a timestamped session
+  event stream. Arrow/j-k navigation, mouse clicks, live refresh, and the
+  terminal is restored on every exit path. Non-TTY invocations and all
+  subcommands are byte-for-byte unchanged.
+- **Cloud connect that heals itself** — pressing ⏎ on the Home tab runs the
+  browser sign-in when needed, then plays a hyperspace jump until the sync
+  stream reports live. Root fix underneath: an edge proxy killing the SSE
+  stream mid-read (undici's `TypeError: terminated`) is now retryable
+  instead of parking org-sync in a permanent `terminal` state, and
+  `POST /api/v1/org/reconnect` (operator-only) relaunches a stuck loop
+  without a daemon restart.
+- **Soft cloud disconnect** — `orchestra org pause` / `orchestra org resume`
+  (or `d` in the session): stay joined but stop syncing, keeping cursor and
+  outbox, persisted across daemon restarts. Distinct from `org leave`.
+- **CLI color pass** — accent ids, per-column hues, dimmed metadata across
+  snapshot, card, mail, and team output. TTY-only: piped output (agents,
+  hooks, scripts) stays exactly as before; `NO_COLOR` honored.
+- **Hardening** — board-sourced text is scrubbed of terminal escape
+  sequences before rendering; the reconnect/pause routes require operator
+  authorization.
 - **Org collaboration** — the hosted org board becomes a real shared
   workspace: card moves, edits, claims, and milestone changes now sync
   BOTH ways between every connected machine (optimistic versioning,
