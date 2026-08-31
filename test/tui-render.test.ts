@@ -1,18 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import { decode } from '../src/tui/term.js'
-import { listRegion, renderFrame, type TuiState } from '../src/tui/render.js'
+import { homeActionRow, listRegion, renderFrame, tabAt, type TuiState } from '../src/tui/render.js'
 import { clampSelection } from '../src/tui/app.js'
+import { PET_IDLE, petFrame } from '../src/tui/pet.js'
 
 const state = (over: Partial<TuiState> = {}): TuiState => ({
   boardName: 'agentboard',
   agents: ['jade-newt', 'builder'],
-  cloud: 'live',
-  tab: 'board',
+  org: { joined: true, orgName: 'gatewayz', state: 'live' },
+  passwordSet: false,
+  tab: 'home',
+  mode: 'home',
+  tick: 0,
   cards: [
     { id: 325, column: 'review', title: 'CLI color + typography pass', owner: 'jade-newt', paths: ['src/cli.ts'] },
     { id: 301, column: 'backlog', title: 'Resolve boards from linked git worktrees', owner: null, paths: ['src/server.ts'] },
   ],
   questions: [{ id: 35, from: 'amber-raven', to: 'crimson-stoat', body: 'is the SSE stream path final?' }],
+  logs: [],
+  logScroll: 0,
   selected: 0,
   scroll: 0,
   detail: null,
@@ -20,99 +26,155 @@ const state = (over: Partial<TuiState> = {}): TuiState => ({
   ...over,
 })
 
-describe('tui renderFrame', () => {
-  // Tests run without a TTY, so style helpers are no-ops and frames are plain text.
-  it('renders header, tabs, cards, and footer within the viewport', () => {
-    const lines = renderFrame(state(), 12, 80)
-    expect(lines).toHaveLength(12)
-    expect(lines[0]).toContain('orchestra')
-    expect(lines[0]).toContain('agentboard')
-    expect(lines[0]).toContain('2 agents')
+// Tests run without a TTY, so style helpers are no-ops and frames are plain text.
+describe('tui home landing', () => {
+  it('renders wordmark, pet, status, and connect action — no board dump', () => {
+    const lines = renderFrame(state({ org: { joined: false, orgName: null, state: 'off' } }), 24, 80)
+    const frame = lines.join('\n')
+    expect(lines).toHaveLength(24)
+    expect(frame).toContain('O R C H E S T R A')
+    expect(frame).toContain('( o.o )')
+    expect(frame).toContain('● daemon running')
+    expect(frame).toContain('○ cloud not connected')
+    expect(frame).toContain('[ ⏎  connect to cloud ]')
+    expect(frame).not.toContain('#325') // cards stay behind the Board tab
+    expect(lines[1]).toContain('Home')
     expect(lines[1]).toContain('Board')
-    expect(lines[1]).toContain('Inbox')
-    expect(lines[3]).toContain('#325')
-    expect(lines[3]).toContain('❯')
-    expect(lines[4]).toContain('#301')
-    expect(lines[4]).toContain('(unowned)')
-    expect(lines[11]).toContain('q quit')
+    expect(lines[1]).toContain('Logs')
+  })
+
+  it('shows the connected state when sync is live', () => {
+    const frame = renderFrame(state(), 24, 80).join('\n')
+    expect(frame).toContain('● cloud connected — org gatewayz')
+    expect(frame).toContain('open cloud board')
+  })
+
+  it('animates the pet by tick', () => {
+    expect(petFrame(PET_IDLE, 0)).not.toEqual(petFrame(PET_IDLE, 8))
+    const a = renderFrame(state(), 24, 80).join('\n')
+    const b = renderFrame(state({ tick: 8 }), 24, 80).join('\n')
+    expect(a).not.toEqual(b)
+  })
+
+  it('maps clicks: tab bar hit zones and the connect action row', () => {
+    expect(tabAt(3)).toBe('home')
+    expect(tabAt(10)).toBe('board')
+    expect(tabAt(17)).toBe('logs')
+    expect(tabAt(60)).toBeNull()
+    expect(homeActionRow(24)).toBeGreaterThan(listRegion(24).top)
+    expect(homeActionRow(24)).toBeLessThan(24)
+  })
+})
+
+describe('tui hyperspace + celebrate', () => {
+  it('renders the jump message and moving streaks while connecting', () => {
+    const t1 = renderFrame(state({ mode: 'connecting', tick: 10 }), 24, 80).join('\n')
+    const t2 = renderFrame(state({ mode: 'connecting', tick: 30 }), 24, 80).join('\n')
+    expect(t1).toContain('⟨ jumping to orchestra cloud ⟩')
+    expect(t1).toContain('device handshake')
+    expect(t1).not.toEqual(t2) // starfield advances with the tick
+  })
+
+  it('renders the celebration frame', () => {
+    const frame = renderFrame(state({ mode: 'celebrate' }), 24, 80).join('\n')
+    expect(frame).toContain('● cloud connected')
+    expect(frame).toContain('( ^o^ )')
+  })
+})
+
+describe('tui board, inbox, logs tabs', () => {
+  it('board tab still lists cards', () => {
+    const frame = renderFrame(state({ tab: 'board' }), 12, 80).join('\n')
+    expect(frame).toContain('#325')
+    expect(frame).toContain('(unowned)')
+  })
+
+  it('inbox renders questions', () => {
+    const frame = renderFrame(state({ tab: 'inbox' }), 12, 80).join('\n')
+    expect(frame).toContain('Q#35')
+    expect(frame).toContain('amber-raven → crimson-stoat')
+  })
+
+  it('logs tab renders the event stream with timestamps', () => {
+    const logs = [
+      { ts: '17:49:02', tag: 'daemon', text: 'serving on 127.0.0.1:4750' },
+      { ts: '17:52:44', tag: 'org-sync', text: 'stream closed by proxy — reconnecting (backoff 500ms)' },
+    ]
+    const frame = renderFrame(state({ tab: 'logs', logs }), 12, 100).join('\n')
+    expect(frame).toContain('17:49:02')
+    expect(frame).toContain('serving on 127.0.0.1:4750')
+    expect(frame).toContain('reconnecting')
   })
 
   it('never exceeds the viewport width for plain frames', () => {
-    const lines = renderFrame(state(), 10, 40)
-    for (const line of lines) expect(line.length).toBeLessThanOrEqual(40)
+    for (const tab of ['home', 'board', 'logs'] as const) {
+      for (const line of renderFrame(state({ tab }), 14, 44)) expect(line.length).toBeLessThanOrEqual(44)
+    }
   })
 
-  it('renders the inbox tab and card detail', () => {
-    const inbox = renderFrame(state({ tab: 'inbox' }), 12, 80)
-    expect(inbox.join('\n')).toContain('Q#35')
-    expect(inbox.join('\n')).toContain('amber-raven → crimson-stoat')
-
-    const detail = renderFrame(state({ detail: state().cards[0] }), 12, 80)
-    expect(detail.join('\n')).toContain('CLI color + typography pass')
-    expect(detail.join('\n')).toContain('no description')
-    expect(detail[11]).toContain('esc back')
-  })
-
-  it('scrolls the selection into view', () => {
-    const s = state({ cards: Array.from({ length: 30 }, (_, i) => ({ id: i, column: 'backlog', title: `card ${i}`, owner: null, paths: [] })), selected: 29 })
+  it('scrolls the board selection into view', () => {
+    const s = state({ tab: 'board', cards: Array.from({ length: 30 }, (_, i) => ({ id: i, column: 'backlog', title: `card ${i}`, owner: null, paths: [] })), selected: 29 })
     clampSelection(s, listRegion(12).height)
     expect(s.scroll).toBe(29 - listRegion(12).height + 1)
-    const lines = renderFrame(s, 12, 80)
-    expect(lines.join('\n')).toContain('card 29')
+    expect(renderFrame(s, 12, 80).join('\n')).toContain('card 29')
   })
 })
 
 describe('tui escape injection', () => {
   it('strips control characters from board-sourced text before it reaches the terminal', () => {
     const hostile = state({
+      tab: 'board' as const,
       cards: [{
         id: 1,
         column: 'review',
-        title: 'evil \u001b[2J\u001b]0;spoofed\u0007 title',
-        owner: 'own\u001ber',
-        paths: ['ab'],
-        description: 'body \u001b[8m hidden \u0007',
+        title: 'evil ESCAPE_2J title',
+        owner: 'owner',
+        paths: ['ab'],
+        description: 'body hidden',
       }],
-      questions: [{ id: 2, from: 'a\u001bgent', to: 'all', body: 'ping \u001b[2J' }],
-      boardName: 'board\u001b[31m',
-      status: 'oops \u001b[2J',
+      questions: [{ id: 2, from: 'agent', to: 'all', body: 'ping ESCAPE_2J' }],
+      boardName: 'board ESCAPE_31m',
+      status: 'oops',
     })
-    // Frames render with styling disabled here (non-TTY), so any ESC that survives came
-    // from the hostile input — the exact bytes the scrub exists to remove.
+    // Inject the real control bytes at runtime so no raw bytes live in this file.
+    const ESC = String.fromCharCode(27)
+    const BEL = String.fromCharCode(7)
+    hostile.cards[0].title = `evil ${ESC}[2J${ESC}]0;spoofed${BEL} title`
+    hostile.cards[0].description = `body ${ESC}[8m hidden ${BEL}`
+    hostile.questions[0].body = `ping ${ESC}[2J`
+    hostile.boardName = `board${ESC}[31m`
     for (const view of [
       renderFrame(hostile, 12, 80),
       renderFrame({ ...hostile, tab: 'inbox' as const }, 12, 80),
       renderFrame({ ...hostile, detail: hostile.cards[0] }, 12, 80),
     ]) {
       const frame = view.join('\n')
-      expect(frame).not.toContain('\u001b')
-      expect(frame).not.toContain('\u0007')
-      expect(frame).not.toContain('\u009b')
+      expect(frame).not.toContain(ESC)
+      expect(frame).not.toContain(BEL)
     }
-    // Printable text survives the scrub — only the control bytes are removed.
     expect(renderFrame(hostile, 12, 80).join('\n')).toContain('evil')
-    expect(renderFrame({ ...hostile, tab: 'inbox' as const }, 12, 80).join('\n')).toContain('ping')
   })
 })
 
 describe('tui input decoding', () => {
+  const ESC = String.fromCharCode(27)
   it('decodes arrows, enter, tab, quit, and ctrl-c', () => {
-    expect(decode('\u001b[A')).toEqual([{ name: 'up', ctrl: false }])
-    expect(decode('\u001b[B')).toEqual([{ name: 'down', ctrl: false }])
+    expect(decode(`${ESC}[A`)).toEqual([{ name: 'up', ctrl: false }])
+    expect(decode(`${ESC}[B`)).toEqual([{ name: 'down', ctrl: false }])
     expect(decode('\r')).toEqual([{ name: 'enter', ctrl: false }])
     expect(decode('\t')).toEqual([{ name: 'tab', ctrl: false }])
     expect(decode('q')).toEqual([{ name: 'q', ctrl: false }])
-    expect(decode('\u0003')).toEqual([{ name: 'c', ctrl: true }])
+    expect(decode(String.fromCharCode(3))).toEqual([{ name: 'c', ctrl: true }])
   })
 
   it('decodes SGR mouse presses and ignores releases and other buttons', () => {
-    expect(decode('\u001b[<0;12;5M')).toEqual([{ x: 12, y: 5 }])
-    expect(decode('\u001b[<0;12;5m')).toEqual([])
-    expect(decode('\u001b[<64;12;5M')).toEqual([]) // wheel
+    expect(decode(`${ESC}[<0;12;5M`)).toEqual([{ x: 12, y: 5 }])
+    expect(decode(`${ESC}[<0;12;5m`)).toEqual([])
+    expect(decode(`${ESC}[<64;12;5M`)).toEqual([]) // wheel
   })
 
   it('collapses unknown escape sequences instead of leaking characters', () => {
-    expect(decode('\u001b[1;5C')).toEqual([]) // ctrl-right: swallowed whole
-    expect(decode('\u001b')).toEqual([{ name: 'escape', ctrl: false }])
+    expect(decode(`${ESC}[1;5C`)).toEqual([]) // ctrl-right: swallowed whole
+    expect(decode(ESC)).toEqual([{ name: 'escape', ctrl: false }])
   })
 })

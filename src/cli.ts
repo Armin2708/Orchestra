@@ -1012,7 +1012,18 @@ if (process.argv.length <= 2 && process.stdin.isTTY && process.stdout.isTTY) {
     if (!running && !(await ensureDaemon())) { console.error(red('daemon unreachable')); process.exit(1) }
     const b = await board()
     const { runTui } = await import('./tui/app.js')
-    await runTui({ api: (method, path) => api(method, path), boardId: b.id })
+    await runTui({
+      api: (method, path) => api(method, path),
+      boardId: b.id,
+      passwordSet: passwordConfigured(),
+      // The browser sign-in runs with the terminal released; the TUI resumes and
+      // animates until the daemon's sync stream reports live.
+      signIn: async (say) => {
+        await performLogin({ hub: cloudHubUrl(), web: cloudWebUrl() }, { deviceLabel: machineName })
+        const { org } = await connectOrg(defaultConnectOrgDeps())
+        say(`joined ${org.name}`)
+      },
+    })
     process.exit(0)
   })().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
 } else if (process.argv.length <= 2) {
