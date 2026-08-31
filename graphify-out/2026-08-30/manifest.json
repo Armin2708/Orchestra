@@ -15,8 +15,8 @@
     "semantic_hash": ""
   },
   ".remember/tmp/last-save.json": {
-    "mtime": 1788121468.3363566,
-    "ast_hash": "5f02e67a9432848875b28407aab214a1",
+    "mtime": 1788121004.3542948,
+    "ast_hash": "73d6950086a25b9e07ab74ac2629980a",
     "semantic_hash": ""
   },
   "hooks/hooks.json": {
@@ -505,8 +505,8 @@
     "semantic_hash": ""
   },
   ".remember/now.md": {
-    "mtime": 1788121468.2915277,
-    "ast_hash": "40c6d511d54be28283e7365485132c9d",
+    "mtime": 1788121071.097031,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
     "semantic_hash": ""
   },
   ".remember/recent.md": {
@@ -5202,6 +5202,11 @@
   "site/assets/orchestra-icon-dark.svg": {
     "mtime": 1788119849.0960188,
     "ast_hash": "424c9a922c08d6b13243f08e7ce8c3de",
+    "semantic_hash": ""
+  },
+  "site/assets/demo-agent-cloud.json": {
+    "mtime": 1788121257.6776745,
+    "ast_hash": "29126a181725bae4c28ff151483d1aa0",
     "semantic_hash": ""
   },
   "src/hub/migrations/007-hub-milestones.sql": {
