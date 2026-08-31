@@ -21,5 +21,5 @@ export const PET_PARTY: readonly string[] = [
 ]
 
 /** Pick a frame for the current tick; `every` slows the loop (ticks per frame). */
-export const petFrame = (frames: readonly string[], tick: number, every = 4): string =>
+export const petFrame = (frames: readonly string[], tick: number, every = 8): string =>
   frames[Math.floor(tick / every) % frames.length]

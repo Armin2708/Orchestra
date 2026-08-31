@@ -196,7 +196,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
     tickTimer = setInterval(() => {
       state.tick += 1
       if (state.tab === 'home') render() // only the animated tab repaints on ticks
-    }, options.tickMs ?? 150)
+    }, options.tickMs ?? 60)
     tickTimer.unref?.()
   })
 }

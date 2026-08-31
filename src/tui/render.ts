@@ -211,9 +211,12 @@ function renderHyper(state: TuiState, height: number, cols: number): string[] {
   const cx = Math.floor(cols / 2)
   const maxR = Math.max(cols, height)
   for (const s of STREAKS) {
-    const r = ((state.tick * s.speed + s.phase * 3) % maxR)
-    for (let seg = 0; seg < 3; seg++) {
-      const rr = r - seg * 2
+    // Hyperspace reads as speed only if the rays accelerate outward: radius grows
+    // quadratically from the center, and each ray drags a long tail behind it.
+    const base = ((state.tick * s.speed * 2.2 + s.phase * 3) % maxR)
+    const r = 6 + (base * base) / maxR
+    for (let seg = 0; seg < 6; seg++) {
+      const rr = r - seg * (2 + r / 18)
       if (rr < 6) continue
       const x = Math.round(cx + Math.cos(s.angle) * rr)
       const y = Math.round(cy + Math.sin(s.angle) * rr * 0.5) // terminal cells are tall
