@@ -22,6 +22,8 @@ export interface RunTuiOptions {
   /** Runs the browser sign-in + org join with the terminal released; resolves when the
    * credential is in place (the TUI then animates until the sync stream reports live). */
   signIn?: (say: (line: string) => void) => Promise<void>
+  /** Opens the hosted cloud board in the browser — the Home action once sync is live. */
+  openCloudBoard?: () => void
   /** Fetch daemon org-sync status; defaults to GET /org through `api`. */
   orgStatus?: () => Promise<TuiOrgStatus | null>
   refreshMs?: number
@@ -98,6 +100,20 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
 
     // The connect flow: (optionally) release the terminal for the browser sign-in,
     // then hyperspace until the daemon's sync stream reports live.
+    // Enter/click on the Home action: connect when disconnected, open the cloud board
+    // in the browser when live — matching whichever label the landing shows.
+    const homeAction = () => {
+      if (state.org?.state === 'live') {
+        if (options.openCloudBoard) {
+          options.openCloudBoard()
+          state.status = 'opening the cloud board in your browser…'
+          log('daemon', 'opened the cloud board in the browser')
+        }
+        return render()
+      }
+      void connect()
+    }
+
     const connect = async () => {
       if (connecting || state.org?.state === 'live') return
       connecting = true
@@ -161,7 +177,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       else if (key.name === '2' || key.name === 'b') state.tab = 'board'
       else if (key.name === '3' || key.name === 'l') state.tab = 'logs'
       else if (key.name === 'i' && state.tab === 'board') { state.tab = 'inbox'; state.selected = 0; state.scroll = 0 }
-      else if (key.name === 'enter' && state.tab === 'home') { void connect(); return }
+      else if (key.name === 'enter' && state.tab === 'home') { homeAction(); return }
       else if (key.name === 'enter' && state.tab === 'board' && state.cards.length) state.detail = state.cards[state.selected] ?? null
       else if (key.name === 'up' || key.name === 'k') state.tab === 'logs' ? (state.logScroll += 1) : (state.selected -= 1)
       else if (key.name === 'down' || key.name === 'j') state.tab === 'logs' ? (state.logScroll = Math.max(0, state.logScroll - 1)) : (state.selected += 1)
@@ -178,7 +194,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         return render()
       }
       if (state.tab === 'home') {
-        if (click.y === homeActionRow(rows) && state.mode === 'home') void connect()
+        if (click.y === homeActionRow(rows) && state.mode === 'home') homeAction()
         return
       }
       const { top, height } = listRegion(rows)

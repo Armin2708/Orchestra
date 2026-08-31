@@ -31,7 +31,7 @@ const sameSecret = (a: string, b: string): boolean => {
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
-const openInBrowser = (url: string): void => {
+export const openInBrowser = (url: string): void => {
   const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
   spawn(command, [url], { stdio: 'ignore', detached: true }).unref()
 }

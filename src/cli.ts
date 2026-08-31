@@ -25,7 +25,7 @@ import { buildInitAction, initProviderOption } from './init-cli.js'
 import { registerFirstRunCommands } from './first-run-cli.js'
 import { registerHubCommands } from './hub-cli.js'
 import { registerOrgCommands } from './org-cli.js'
-import { registerLoginCommands, performLogin, cloudHubUrl, cloudWebUrl } from './login-cli.js'
+import { registerLoginCommands, performLogin, cloudHubUrl, cloudWebUrl, openInBrowser } from './login-cli.js'
 import { connectOrg, defaultConnectOrgDeps } from './org-cli.js'
 import { confirmAtTerminal, machineName, offerCloudSignIn } from './cloud-splash.js'
 import { awaitOrgSync, TerminalStatus, type OrgSyncSnapshot } from './terminal-status.js'
@@ -1023,6 +1023,7 @@ if (process.argv.length <= 2 && process.stdin.isTTY && process.stdout.isTTY) {
         const { org } = await connectOrg(defaultConnectOrgDeps())
         say(`joined ${org.name}`)
       },
+      openCloudBoard: () => openInBrowser(cloudWebUrl()),
     })
     process.exit(0)
   })().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
