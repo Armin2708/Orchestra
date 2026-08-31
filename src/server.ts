@@ -376,7 +376,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.get('/api/v1/org', async () => opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, boardId: null, state: 'off', detail: null })
   // The sync loop parks itself in `terminal` after a non-retryable hub failure; this is
   // the operator's way to relaunch it (TUI connect, UI button) without a daemon restart.
-  server.post('/api/v1/org/reconnect', async () => {
+  // Operator-only: agents must not be able to bounce the org connection.
+  server.post('/api/v1/org/reconnect', async (request, reply) => {
+    if (!requireOperator(request, reply)) return
     await opts.orgSyncReconnect?.()
     return opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, boardId: null, state: 'off', detail: null }
   })
