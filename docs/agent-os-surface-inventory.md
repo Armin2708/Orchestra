@@ -550,6 +550,7 @@ GET /health
 POST /api/v1/auth/login
 POST /api/v1/auth/setup
 POST /api/v1/hub/orgs/:orgId/ops
+POST /api/v1/org/pause
 POST /api/v1/org/reconnect
 POST /api/v1/push/ntfy
 POST /api/v1/push/subscribe

@@ -178,6 +178,19 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       else if (key.name === '3' || key.name === 'l') state.tab = 'logs'
       else if (key.name === 'i' && state.tab === 'board') { state.tab = 'inbox'; state.selected = 0; state.scroll = 0 }
       else if (key.name === 'enter' && state.tab === 'home') { homeAction(); return }
+      else if (key.name === 'd' && state.tab === 'home' && state.org?.state === 'live') {
+        void (async () => {
+          try {
+            state.org = await options.api('POST', '/org/pause')
+            log('org-sync', 'paused — local only (⏎ to reconnect)')
+            state.status = 'cloud paused — local only'
+          } catch (error) {
+            state.status = `pause failed: ${error instanceof Error ? error.message : String(error)}`
+          }
+          render()
+        })()
+        return
+      }
       else if (key.name === 'enter' && state.tab === 'board' && state.cards.length) state.detail = state.cards[state.selected] ?? null
       else if (key.name === 'up' || key.name === 'k') state.tab === 'logs' ? (state.logScroll += 1) : (state.selected -= 1)
       else if (key.name === 'down' || key.name === 'j') state.tab === 'logs' ? (state.logScroll = Math.max(0, state.logScroll - 1)) : (state.selected += 1)

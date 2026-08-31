@@ -66,6 +66,15 @@ describe('tui home landing', () => {
   })
 })
 
+describe('tui paused state', () => {
+  it('shows local-only and a reconnect action when sync is paused', () => {
+    const frame = renderFrame(state({ org: { joined: true, orgName: 'gatewayz', state: 'paused' } }), 24, 80).join('\n')
+    expect(frame).toContain('○ cloud paused — local only')
+    expect(frame).toContain('[ ⏎  reconnect to cloud ]')
+    expect(frame).toContain('○ local only')
+  })
+})
+
 describe('tui hyperspace + celebrate', () => {
   it('renders the jump message and moving streaks while connecting', () => {
     const t1 = renderFrame(state({ mode: 'connecting', tick: 10 }), 24, 80).join('\n')

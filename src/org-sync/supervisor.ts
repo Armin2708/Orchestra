@@ -17,8 +17,14 @@ import type { SyncState } from './sync-loop.js'
 // credential instead, so join and leave take effect on a running daemon.
 
 const CREDENTIAL_FILE = 'org.json'
+// A soft disconnect: joined but deliberately not syncing. A marker file (not a field in
+// the credential) so pausing never rewrites — and can never corrupt — the credential,
+// and so `org leave`'s cleanup semantics stay untouched. Pausing keeps cursor + outbox.
+const PAUSE_MARKER = 'org-sync.paused'
 
-export type SupervisedSyncState = SyncState | 'off'
+export const orgSyncPauseMarkerPath = (home: string): string => path.join(home, PAUSE_MARKER)
+
+export type SupervisedSyncState = SyncState | 'off' | 'paused'
 
 export interface DaemonOrgSyncSupervisor {
   /** The running loop's state, or 'off' when no organization is joined. */
@@ -34,6 +40,10 @@ export interface DaemonOrgSyncSupervisor {
   /** Force a loop restart even when the credential is unchanged — the escape hatch for
    * a loop stuck terminal (reload() deliberately no-ops on an identical credential). */
   restart(): Promise<void>
+  /** Soft disconnect: stay joined, stop syncing (persists across daemon restarts). */
+  pause(): Promise<void>
+  /** Clear a pause and relaunch the loop; safe to call when not paused. */
+  resume(): Promise<void>
   stop(): Promise<void>
 }
 
@@ -72,6 +82,8 @@ export async function superviseDaemonOrgSync(
   let current: string | null = null
   let currentOrgId: string | null = null
   let currentOrgName: string | null = null
+  let paused = false
+  const pauseMarker = orgSyncPauseMarkerPath(home)
   let announcedOff = false
   let stopped = false
   let watcher: fs.FSWatcher | undefined
@@ -105,7 +117,10 @@ export async function superviseDaemonOrgSync(
   const applyCredential = async (): Promise<void> => {
     if (stopped) return
     const credential = await load().catch(() => null)
-    const next = fingerprint(credential)
+    // Paused is part of the fingerprint: toggling the marker with an unchanged
+    // credential must still stop or start the loop.
+    const pausedNow = credential != null && fs.existsSync(pauseMarker)
+    const next = credential === null ? null : `${pausedNow ? 'paused:' : ''}${fingerprint(credential)}`
     if (next === current) return
     // Claim the new fingerprint up front so concurrent events coalesce, but drop the
     // claim on any failure below — a poisoned fingerprint would make every later
@@ -113,11 +128,14 @@ export async function superviseDaemonOrgSync(
     current = next
     currentOrgId = credential?.orgId ?? null
     currentOrgName = credential?.orgName ?? null
+    paused = pausedNow
     try {
       if (handle) {
         const previous = handle
         handle = null
         await stopHandle(previous)
+        // A pause keeps cursor and outbox — it is a soft disconnect, not a departure.
+        if (credential && pausedNow) output('org-sync paused — local only (orchestra org resume to reconnect)')
         if (!credential) {
           // Clear the cursor and outbox here, not in the CLI: this is the process that
           // owns the loop, so by now nothing can still be writing them. A cursor that
@@ -134,6 +152,7 @@ export async function superviseDaemonOrgSync(
         return
       }
       announcedOff = true
+      if (pausedNow) return // joined but deliberately local-only: no loop
       handle = await start({ ...options, home, output, loadCredential: async () => credential })
       if (!handle) current = null
     } catch (error) {
@@ -157,7 +176,7 @@ export async function superviseDaemonOrgSync(
       // Watch the directory, not the file: the credential is saved by renaming a temp file
       // over it, which replaces the inode a file watch would still be holding.
       watcher = fs.watch(home, (_event, filename) => {
-        if (filename && filename !== CREDENTIAL_FILE) return
+        if (filename && filename !== CREDENTIAL_FILE && filename !== PAUSE_MARKER) return
         if (debounce) clearTimeout(debounce)
         debounce = setTimeout(() => { void reload() }, options.debounceMs ?? 150)
         debounce.unref?.()
@@ -171,7 +190,7 @@ export async function superviseDaemonOrgSync(
   }
 
   return {
-    state: () => handle?.state() ?? 'off',
+    state: () => paused && currentOrgId ? 'paused' : handle?.state() ?? 'off',
     orgId: () => currentOrgId,
     orgName: () => currentOrgName,
     detail: () => handle?.detail() ?? null,
@@ -179,6 +198,16 @@ export async function superviseDaemonOrgSync(
     restart: () => {
       // Drop the fingerprint claim so the queued applyCredential sees a "change" and
       // replaces the loop; serialised through the same queue as every other reload.
+      current = null
+      return reload()
+    },
+    pause: () => {
+      fs.writeFileSync(pauseMarker, `${new Date().toISOString()}\n`, { mode: 0o600 })
+      current = null
+      return reload()
+    },
+    resume: () => {
+      fs.rmSync(pauseMarker, { force: true })
       current = null
       return reload()
     },

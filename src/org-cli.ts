@@ -1,5 +1,7 @@
 import type { Command } from 'commander'
+import fs from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 import { loadCliCredential, type CliCredential } from './cli-auth.js'
 import {
   clearOrgCredential,
@@ -239,6 +241,8 @@ export function defaultConnectOrgDeps(output: (line: string) => void = console.l
   }
 }
 
+const orchestraHome = (): string => process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
+
 export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): void {
   const load = deps.loadCredential ?? (() => loadOrgCredential())
   const save = deps.saveCredential ?? ((credential) => saveOrgCredential(credential))
@@ -368,6 +372,43 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
       output(`local org board id: ${board.boardId}`)
       output('cards created or claimed on this board are shared with the organization')
       output(`message a teammate's agent: orchestra ask <agent> '<question>' on this board`)
+    })
+
+  org.command('pause')
+    .description('stay joined but stop syncing — local only until `orchestra org resume`')
+    .action(async () => {
+      const credential = await load()
+      if (!credential) { output('not joined to a hosted organization'); return }
+      try {
+        const { baseUrl } = await import('./daemon.js')
+        const response = await fetch(`${baseUrl()}/api/v1/org/pause`, { method: 'POST', signal: AbortSignal.timeout(5_000) })
+        if (!response.ok) throw new Error(`daemon refused: ${response.status}`)
+        output('org-sync paused — this machine is local only (cursor and outbox kept)')
+      } catch {
+        // No daemon to ask: leave the marker for the next boot to honor.
+        const { orgSyncPauseMarkerPath } = await import('./org-sync/supervisor.js')
+        fs.writeFileSync(orgSyncPauseMarkerPath(orchestraHome()), `${new Date().toISOString()}\n`, { mode: 0o600 })
+        output('daemon not reachable — pause recorded; it takes effect when the daemon starts')
+      }
+      output('resume with: orchestra org resume')
+    })
+
+  org.command('resume')
+    .description('resume syncing with the hosted organization after a pause')
+    .action(async () => {
+      const credential = await load()
+      if (!credential) { output('not joined to a hosted organization'); return }
+      try {
+        const { baseUrl } = await import('./daemon.js')
+        const response = await fetch(`${baseUrl()}/api/v1/org/reconnect`, { method: 'POST', signal: AbortSignal.timeout(5_000) })
+        if (!response.ok) throw new Error(`daemon refused: ${response.status}`)
+        const status = await response.json().catch(() => null) as { state?: string } | null
+        output(`org-sync resuming${status?.state ? ` — sync ${status.state}` : ''}`)
+      } catch {
+        const { orgSyncPauseMarkerPath } = await import('./org-sync/supervisor.js')
+        fs.rmSync(orgSyncPauseMarkerPath(orchestraHome()), { force: true })
+        output('daemon not reachable — pause cleared; sync resumes when the daemon starts')
+      }
     })
 
   org.command('leave')

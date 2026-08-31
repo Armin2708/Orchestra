@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { superviseDaemonOrgSync } from '../src/org-sync/supervisor.js'
+import { orgSyncPauseMarkerPath, superviseDaemonOrgSync } from '../src/org-sync/supervisor.js'
 import { saveOrgCredential, clearOrgCredential, type OrgCredential } from '../src/org-sync/credentials.js'
 import type { DaemonOrgSyncHandle, StartDaemonOrgSyncOptions } from '../src/org-sync/daemon-integration.js'
 
@@ -105,6 +105,36 @@ describe('superviseDaemonOrgSync', () => {
     expect(rec.started).toEqual(['org_a', 'org_a'])
     expect(rec.stopped).toEqual(['org_a'])
     expect(rec.liveCount()).toBe(1)
+    await supervisor.stop()
+  })
+
+  it('pause() stops the loop but stays joined; resume() brings it back', async () => {
+    const rec = recordingStart()
+    const supervisor = await superviseDaemonOrgSync({ home, watch: false, start: rec.start, output: () => {} })
+    await saveOrgCredential(credential('org_a'), home)
+    await supervisor.reload()
+    expect(rec.started).toEqual(['org_a'])
+    await supervisor.pause()
+    expect(rec.stopped).toEqual(['org_a'])
+    expect(supervisor.state()).toBe('paused')
+    expect(supervisor.orgId()).toBe('org_a') // still joined — a pause is not a departure
+    // reload keeps honoring the pause
+    await supervisor.reload()
+    expect(rec.started).toEqual(['org_a'])
+    await supervisor.resume()
+    expect(rec.started).toEqual(['org_a', 'org_a'])
+    expect(rec.liveCount()).toBe(1)
+    await supervisor.stop()
+  })
+
+  it('honors a pause marker already on disk at boot', async () => {
+    const rec = recordingStart()
+    await saveOrgCredential(credential('org_a'), home)
+    const fsMod = await import('node:fs')
+    fsMod.writeFileSync(orgSyncPauseMarkerPath(home), 'paused\n')
+    const supervisor = await superviseDaemonOrgSync({ home, watch: false, start: rec.start, output: () => {} })
+    expect(rec.started).toEqual([])
+    expect(supervisor.state()).toBe('paused')
     await supervisor.stop()
   })
 

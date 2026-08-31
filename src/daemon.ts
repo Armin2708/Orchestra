@@ -744,7 +744,9 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         }
       },
       // Same lazy-read rule as orgSyncStatus: the supervisor exists only after listen().
-      orgSyncReconnect: async () => { await orgSync?.restart() },
+      // Reconnect doubles as resume: it clears any pause marker before relaunching.
+      orgSyncReconnect: async () => { await orgSync?.resume() },
+      orgSyncPause: async () => { await orgSync?.pause() },
       token,
       agentToken,
       localOwnerAuth,

@@ -151,8 +151,10 @@ export interface ServerOptions {
   /** The daemon's organization sync state, so `orchestra org connect` can wait for a real
    * connection instead of guessing with a timer. Absent outside the daemon. */
   orgSyncStatus?: () => { joined: boolean; orgId: string | null; orgName?: string | null; boardId?: number | null; state: string; detail?: string | null }
-  /** Force-restart the org-sync loop (escape hatch for a terminal state). */
+  /** Force-restart the org-sync loop (escape hatch for a terminal state); also resumes a pause. */
   orgSyncReconnect?: () => Promise<void>
+  /** Soft disconnect: stay joined, stop syncing until reconnect. */
+  orgSyncPause?: () => Promise<void>
 }
 
 // Native macOS choose-folder dialog for “+ Add project”. Runs on the daemon's own
@@ -380,6 +382,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.post('/api/v1/org/reconnect', async (request, reply) => {
     if (!requireOperator(request, reply)) return
     await opts.orgSyncReconnect?.()
+    return opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, boardId: null, state: 'off', detail: null }
+  })
+  // Soft disconnect (operator-only, like reconnect): stay joined but go local-only.
+  // Cursor and outbox are kept — this is a pause, not `org leave`.
+  server.post('/api/v1/org/pause', async (request, reply) => {
+    if (!requireOperator(request, reply)) return
+    await opts.orgSyncPause?.()
     return opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, boardId: null, state: 'off', detail: null }
   })
 

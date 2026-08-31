@@ -143,7 +143,8 @@ export function renderFrame(state: TuiState, rows: number, cols: number): string
 function headerLine(state: TuiState, cols: number): string {
   const cloud = state.org?.state === 'live'
     ? `${green('●')} ${truncate(state.org.orgName ?? 'cloud', 20)}`
-    : state.org?.joined ? dim(`○ ${truncate(state.org.state, 16)}`) : dim('○ local')
+    : state.org?.state === 'paused' ? dim('○ local only')
+      : state.org?.joined ? dim(`○ ${truncate(state.org.state, 16)}`) : dim('○ local')
   return ` ${bold('orchestra')} ${dim('·')} ${bold(truncate(state.boardName, Math.max(8, cols - 44)))} ${dim('·')} ${state.agents.length} agents ${dim('·')} ${cloud}`
 }
 
@@ -157,6 +158,7 @@ function tabLine(state: TuiState): string {
 function footerFor(state: TuiState): string {
   if (state.detail) return 'esc back · q quit'
   if (state.tab === 'home' && state.mode === 'connecting') return 'connecting… · esc cancel · q quit'
+  if (state.tab === 'home' && state.org?.state === 'live') return 'tab switch · ⏎ open board · d disconnect · b board · l logs · q quit'
   if (state.tab === 'home') return 'tab switch · ⏎ connect · b board · l logs · q quit'
   if (state.tab === 'logs') return '↑↓ scroll · tab switch · q quit'
   if (state.tab === 'inbox') return '↑↓/jk move · tab switch · q quit'
@@ -183,14 +185,16 @@ function renderHome(state: TuiState, height: number, cols: number): string[] {
   const cloudLive = state.org?.state === 'live'
   const cloudLine = cloudLive
     ? `● cloud connected — org ${state.org?.orgName ?? ''}`
-    : state.org?.joined ? `○ cloud ${state.org.state}` : '○ cloud not connected'
+    : state.org?.state === 'paused' ? '○ cloud paused — local only'
+      : state.org?.joined ? `○ cloud ${state.org.state}` : '○ cloud not connected'
   const left = center(cloudLine, cols)
   rows.push(at(left, `${green('●')} daemon running`))
   rows.push(at(left, dim(pw)))
   rows.push(at(left, cloudLive ? green(cloudLine) : dim(cloudLine)))
   rows.push('')
   while (rows.length < homeActionOffset(height)) rows.push('')
-  const action = cloudLive ? `⏎  open cloud board in browser` : `⏎  connect to cloud`
+  const action = cloudLive ? `⏎  open cloud board in browser`
+    : state.org?.state === 'paused' ? `⏎  reconnect to cloud` : `⏎  connect to cloud`
   const framed = `[ ${action} ]`
   rows.push(at(center(framed, cols), accent(bold(framed))))
   return fill(rows.slice(0, height), height)
