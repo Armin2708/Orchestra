@@ -116,6 +116,11 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         }
         state.mode = 'connecting'
         log('org-sync', 'connecting to orchestra cloud')
+        // A joined-but-not-live loop may be parked terminal after a non-retryable hub
+        // failure; the daemon relaunches it on this kick (older daemons 404 — ignore).
+        if (before?.joined && before.state !== 'live') {
+          try { await options.api('POST', '/org/reconnect') } catch { /* older daemon */ }
+        }
         const started = state.tick
         while (state.tick - started < CONNECT_TIMEOUT_TICKS && state.mode === 'connecting') {
           const org = await orgStatus()

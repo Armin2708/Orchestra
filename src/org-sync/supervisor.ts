@@ -31,6 +31,9 @@ export interface DaemonOrgSyncSupervisor {
   detail(): string | null
   /** Re-read the credential and start, stop, or switch the sync loop to match it. */
   reload(): Promise<void>
+  /** Force a loop restart even when the credential is unchanged — the escape hatch for
+   * a loop stuck terminal (reload() deliberately no-ops on an identical credential). */
+  restart(): Promise<void>
   stop(): Promise<void>
 }
 
@@ -173,6 +176,12 @@ export async function superviseDaemonOrgSync(
     orgName: () => currentOrgName,
     detail: () => handle?.detail() ?? null,
     reload,
+    restart: () => {
+      // Drop the fingerprint claim so the queued applyCredential sees a "change" and
+      // replaces the loop; serialised through the same queue as every other reload.
+      current = null
+      return reload()
+    },
     stop: async () => {
       stopped = true
       if (debounce) clearTimeout(debounce)

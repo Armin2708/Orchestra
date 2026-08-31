@@ -91,6 +91,23 @@ describe('superviseDaemonOrgSync', () => {
     await supervisor.stop()
   })
 
+  it('restart() replaces the loop even when the credential is unchanged', async () => {
+    const rec = recordingStart()
+    const supervisor = await superviseDaemonOrgSync({ home, watch: false, start: rec.start, output: () => {} })
+    await saveOrgCredential(credential('org_a'), home)
+    await supervisor.reload()
+    expect(rec.started).toEqual(['org_a'])
+    // reload() must still no-op on an unchanged credential…
+    await supervisor.reload()
+    expect(rec.started).toEqual(['org_a'])
+    // …while restart() is the deliberate escape hatch for a terminal loop.
+    await supervisor.restart()
+    expect(rec.started).toEqual(['org_a', 'org_a'])
+    expect(rec.stopped).toEqual(['org_a'])
+    expect(rec.liveCount()).toBe(1)
+    await supervisor.stop()
+  })
+
   it('does not restart a healthy loop when the credential is rewritten unchanged', async () => {
     await saveOrgCredential(credential('org_a'), home)
     const rec = recordingStart()

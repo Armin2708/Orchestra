@@ -195,4 +195,18 @@ describe('HubClient', () => {
     writeController.abort()
     await expect(writing).rejects.toMatchObject({ name: 'AbortError' })
   })
+
+  it('treats a mid-stream socket kill as retryable, never terminal', async () => {
+    handler = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.write('id: 1\ndata: {"seq":1,"type":"card.updated"}\n\n')
+      // An RST mid-stream is how an edge proxy culls an idle SSE connection; undici
+      // surfaces it as a raw TypeError («terminated»), which must map to retryable.
+      setTimeout(() => response.socket?.resetAndDestroy(), 30)
+    }
+    const seen: number[] = []
+    await expect(client.streamSince(0, async (event: any) => { seen.push(event.seq) }, new AbortController().signal))
+      .rejects.toBeInstanceOf(HubRetryableError)
+    expect(seen).toEqual([1])
+  })
 })

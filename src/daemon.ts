@@ -743,6 +743,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
           detail: orgSync?.detail() ?? null,
         }
       },
+      // Same lazy-read rule as orgSyncStatus: the supervisor exists only after listen().
+      orgSyncReconnect: async () => { await orgSync?.restart() },
       token,
       agentToken,
       localOwnerAuth,

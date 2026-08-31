@@ -131,7 +131,17 @@ export class HubClient {
     let buffer = ''
     try {
       for (;;) {
-        const { done, value } = await reader.read()
+        let chunk: ReadableStreamReadResult<Uint8Array>
+        try {
+          chunk = await reader.read()
+        } catch (error) {
+          // undici surfaces a mid-stream socket kill as a raw TypeError («terminated»).
+          // A dropped stream is the normal end of an SSE connection — edge proxies cull
+          // idle ones routinely — so it must reconnect, never poison the loop terminal.
+          if (isAbortError(error) || signal.aborted) throw error
+          throw new HubRetryableError('hub sync stream dropped mid-read', undefined, { cause: error })
+        }
+        const { done, value } = chunk
         buffer += decoder.decode(value, { stream: !done })
         let boundary = /\r?\n\r?\n/.exec(buffer)
         while (boundary) {

@@ -151,6 +151,8 @@ export interface ServerOptions {
   /** The daemon's organization sync state, so `orchestra org connect` can wait for a real
    * connection instead of guessing with a timer. Absent outside the daemon. */
   orgSyncStatus?: () => { joined: boolean; orgId: string | null; orgName?: string | null; boardId?: number | null; state: string; detail?: string | null }
+  /** Force-restart the org-sync loop (escape hatch for a terminal state). */
+  orgSyncReconnect?: () => Promise<void>
 }
 
 // Native macOS choose-folder dialog for “+ Add project”. Runs on the daemon's own
@@ -372,6 +374,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
    * never the token: this reports liveness, and the CLI already holds the credential.
    */
   server.get('/api/v1/org', async () => opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, boardId: null, state: 'off', detail: null })
+  // The sync loop parks itself in `terminal` after a non-retryable hub failure; this is
+  // the operator's way to relaunch it (TUI connect, UI button) without a daemon restart.
+  server.post('/api/v1/org/reconnect', async () => {
+    await opts.orgSyncReconnect?.()
+    return opts.orgSyncStatus?.() ?? { joined: false, orgId: null, orgName: null, boardId: null, state: 'off', detail: null }
+  })
 
   server.get('/health', async () => {
     const status = await operations.publicReadiness()
