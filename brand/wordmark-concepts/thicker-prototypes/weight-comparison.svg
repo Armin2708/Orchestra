@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1100" role="img" aria-labelledby="title desc">
+  <title id="title">Orchestra mark weight comparison</title>
+  <desc id="desc">Four side-by-side weight prototypes of the approved twenty-one-seat Orchestra logo.</desc>
+  <rect width="1600" height="1100" fill="#F7F6F3"/>
+  <style>
+    text { font-family: Geist, Inter, ui-sans-serif, system-ui, sans-serif; fill: #111; }
+    .name { font-size: 34px; font-weight: 650; letter-spacing: -.8px; }
+    .meta { font-size: 19px; fill: #62625D; }
+    .tiny { font-size: 15px; fill: #7A7A74; }
+  </style>
+  <defs>
+    <path id="seat" d="M-12-18H12L8 18H-8Z" stroke-linejoin="miter"/>
+    <g id="formation">
+      <g color="#A1A19B" fill="currentColor" stroke="currentColor">
+        <use href="#seat" transform="translate(-188 34) rotate(-72) scale(1.05)"/><use href="#seat" transform="translate(-156 -22) rotate(-57) scale(1.05)"/><use href="#seat" transform="translate(-111 -67) rotate(-41) scale(1.05)"/><use href="#seat" transform="translate(-57 -95) rotate(-21) scale(1.05)"/><use href="#seat" transform="translate(0 -105) scale(1.05)"/><use href="#seat" transform="translate(57 -95) rotate(21) scale(1.05)"/><use href="#seat" transform="translate(111 -67) rotate(41) scale(1.05)"/><use href="#seat" transform="translate(156 -22) rotate(57) scale(1.05)"/><use href="#seat" transform="translate(188 34) rotate(72) scale(1.05)"/>
+      </g>
+      <g color="#62625D" fill="currentColor" stroke="currentColor">
+        <use href="#seat" transform="translate(-142 48) rotate(-65) scale(.96)"/><use href="#seat" transform="translate(-99 -2) rotate(-49) scale(.96)"/><use href="#seat" transform="translate(-51 -35) rotate(-27) scale(.96)"/><use href="#seat" transform="translate(0 -46) scale(.96)"/><use href="#seat" transform="translate(51 -35) rotate(27) scale(.96)"/><use href="#seat" transform="translate(99 -2) rotate(49) scale(.96)"/><use href="#seat" transform="translate(142 48) rotate(65) scale(.96)"/>
+      </g>
+      <g color="#111111" fill="currentColor" stroke="currentColor">
+        <use href="#seat" transform="translate(-91 61) rotate(-56) scale(.88)"/><use href="#seat" transform="translate(-47 32) rotate(-33) scale(.88)"/><use href="#seat" transform="translate(0 22) scale(.88)"/><use href="#seat" transform="translate(47 32) rotate(33) scale(.88)"/><use href="#seat" transform="translate(91 61) rotate(56) scale(.88)"/><path d="M-38 102H38V116H-38Z"/>
+      </g>
+    </g>
+  </defs>
+
+  <text x="70" y="85" font-size="48" font-weight="700" letter-spacing="-1.5">Orchestra mark — weight studies</text>
+  <text x="70" y="125" class="meta">Same 21 seats · same 9–7–5 formation · same centers, angles, colors, and podium</text>
+
+  <g transform="translate(70 175)">
+    <rect width="710" height="390" rx="28" fill="#FFFFFF"/>
+    <use href="#formation" transform="translate(355 185) scale(1.25)" stroke-width="0"/>
+    <text x="34" y="330" class="name">A — Current</text><text x="34" y="362" class="meta">24-unit seat · production reference</text>
+    <use href="#formation" transform="translate(610 338) scale(.13)" stroke-width="0"/><use href="#formation" transform="translate(670 338) scale(.065)" stroke-width="0"/>
+  </g>
+  <g transform="translate(820 175)">
+    <rect width="710" height="390" rx="28" fill="#FFFFFF"/>
+    <use href="#formation" transform="translate(355 185) scale(1.25)" stroke-width="2"/>
+    <text x="34" y="330" class="name">B — Medium</text><text x="34" y="362" class="meta">≈ 26-unit seat · subtle reinforcement</text>
+    <use href="#formation" transform="translate(610 338) scale(.13)" stroke-width="2"/><use href="#formation" transform="translate(670 338) scale(.065)" stroke-width="2"/>
+  </g>
+  <g transform="translate(70 600)">
+    <rect width="710" height="390" rx="28" fill="#FFFFFF"/>
+    <use href="#formation" transform="translate(355 185) scale(1.25)" stroke-width="4"/>
+    <text x="34" y="330" class="name">C — Bold</text><text x="34" y="362" class="meta">≈ 28-unit seat · stronger default</text>
+    <use href="#formation" transform="translate(610 338) scale(.13)" stroke-width="4"/><use href="#formation" transform="translate(670 338) scale(.065)" stroke-width="4"/>
+  </g>
+  <g transform="translate(820 600)">
+    <rect width="710" height="390" rx="28" fill="#FFFFFF"/>
+    <use href="#formation" transform="translate(355 185) scale(1.25)" stroke-width="6"/>
+    <text x="34" y="330" class="name">D — Extra bold</text><text x="34" y="362" class="meta">≈ 30-unit seat · maximum useful weight</text>
+    <use href="#formation" transform="translate(610 338) scale(.13)" stroke-width="6"/><use href="#formation" transform="translate(670 338) scale(.065)" stroke-width="6"/>
+  </g>
+
+  <text x="70" y="1050" class="tiny">Prototype only — canonical brand/identity assets are unchanged.</text>
+</svg>

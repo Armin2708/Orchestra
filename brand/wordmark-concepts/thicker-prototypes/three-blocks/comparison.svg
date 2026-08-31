@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
+  <title id="title">Orchestra three-block section prototypes</title>
+  <desc id="desc">Three versions of an Orchestra mark with three blocks per row and progressively larger widths.</desc>
+  <rect width="1600" height="820" fill="#F7F6F3"/>
+  <style>
+    text { font-family: Geist, Inter, ui-sans-serif, system-ui, sans-serif; fill: #111; }
+    .name { font-size: 31px; font-weight: 650; letter-spacing: -.7px; }
+    .meta { font-size: 18px; fill: #62625D; }
+    .tiny { font-size: 15px; fill: #7A7A74; }
+  </style>
+  <defs>
+    <g id="gentle">
+      <path id="g-o" d="M-15-19H15L11 19H-11Z"/><path id="g-m" d="M-21-19H21L16 19H-16Z"/><path id="g-i" d="M-28-19H28L22 19H-22Z"/>
+      <g fill="#A1A19B"><use href="#g-o" transform="translate(-142 -20) rotate(-55)"/><use href="#g-o" transform="translate(0 -108)"/><use href="#g-o" transform="translate(142 -20) rotate(55)"/></g>
+      <g fill="#62625D"><use href="#g-m" transform="translate(-103 32) rotate(-47)"/><use href="#g-m" transform="translate(0 -44)"/><use href="#g-m" transform="translate(103 32) rotate(47)"/></g>
+      <g fill="#111"><use href="#g-i" transform="translate(-65 72) rotate(-36)"/><use href="#g-i" transform="translate(0 25)"/><use href="#g-i" transform="translate(65 72) rotate(36)"/><path d="M-40 105H40V121H-40Z"/></g>
+    </g>
+    <g id="balanced">
+      <path id="b-o" d="M-18-19H18L14 19H-14Z"/><path id="b-m" d="M-26-19H26L20 19H-20Z"/><path id="b-i" d="M-34-19H34L27 19H-27Z"/>
+      <g fill="#A1A19B"><use href="#b-o" transform="translate(-142 -20) rotate(-55)"/><use href="#b-o" transform="translate(0 -108)"/><use href="#b-o" transform="translate(142 -20) rotate(55)"/></g>
+      <g fill="#62625D"><use href="#b-m" transform="translate(-103 32) rotate(-47)"/><use href="#b-m" transform="translate(0 -44)"/><use href="#b-m" transform="translate(103 32) rotate(47)"/></g>
+      <g fill="#111"><use href="#b-i" transform="translate(-65 72) rotate(-36)"/><use href="#b-i" transform="translate(0 25)"/><use href="#b-i" transform="translate(65 72) rotate(36)"/><path d="M-40 105H40V121H-40Z"/></g>
+    </g>
+    <g id="strong">
+      <path id="s-o" d="M-20-19H20L15 19H-15Z"/><path id="s-m" d="M-30-19H30L23 19H-23Z"/><path id="s-i" d="M-41-19H41L33 19H-33Z"/>
+      <g fill="#A1A19B"><use href="#s-o" transform="translate(-142 -20) rotate(-55)"/><use href="#s-o" transform="translate(0 -108)"/><use href="#s-o" transform="translate(142 -20) rotate(55)"/></g>
+      <g fill="#62625D"><use href="#s-m" transform="translate(-103 32) rotate(-47)"/><use href="#s-m" transform="translate(0 -44)"/><use href="#s-m" transform="translate(103 32) rotate(47)"/></g>
+      <g fill="#111"><use href="#s-i" transform="translate(-65 72) rotate(-36)"/><use href="#s-i" transform="translate(0 25)"/><use href="#s-i" transform="translate(65 72) rotate(36)"/><path d="M-40 105H40V121H-40Z"/></g>
+    </g>
+  </defs>
+
+  <text x="70" y="82" font-size="46" font-weight="700" letter-spacing="-1.4">Three blocks per section</text>
+  <text x="70" y="121" class="meta">Outer → middle → inner rows become progressively wider</text>
+
+  <g transform="translate(70 170)">
+    <rect width="460" height="560" rx="28" fill="#FFF"/>
+    <use href="#gentle" transform="translate(230 250) scale(1.05)"/>
+    <text x="32" y="470" class="name">A — Gentle</text><text x="32" y="505" class="meta">30 → 42 → 56</text>
+    <use href="#gentle" transform="translate(386 497) scale(.16)"/>
+  </g>
+  <g transform="translate(570 170)">
+    <rect width="460" height="560" rx="28" fill="#FFF"/>
+    <use href="#balanced" transform="translate(230 250) scale(1.05)"/>
+    <text x="32" y="470" class="name">B — Balanced</text><text x="32" y="505" class="meta">36 → 52 → 68</text>
+    <use href="#balanced" transform="translate(386 497) scale(.16)"/>
+  </g>
+  <g transform="translate(1070 170)">
+    <rect width="460" height="560" rx="28" fill="#FFF"/>
+    <use href="#strong" transform="translate(230 250) scale(1.05)"/>
+    <text x="32" y="470" class="name">C — Strong</text><text x="32" y="505" class="meta">40 → 60 → 82</text>
+    <use href="#strong" transform="translate(386 497) scale(.16)"/>
+  </g>
+
+  <text x="70" y="785" class="tiny">Concept study — production identity remains unchanged.</text>
+</svg>

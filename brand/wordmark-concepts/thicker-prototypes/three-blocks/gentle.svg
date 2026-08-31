@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 320" role="img" aria-labelledby="title desc">
+  <title id="title">Orchestra mark — three-block gentle growth</title>
+  <desc id="desc">Three blocks in each of three semicircular rows, growing gently wider toward the podium.</desc>
+  <defs>
+    <path id="outer" d="M-15-19H15L11 19H-11Z"/>
+    <path id="middle" d="M-21-19H21L16 19H-16Z"/>
+    <path id="inner" d="M-28-19H28L22 19H-22Z"/>
+  </defs>
+  <g transform="translate(256 170)">
+    <g fill="#A1A19B"><use href="#outer" transform="translate(-142 -20) rotate(-55)"/><use href="#outer" transform="translate(0 -108)"/><use href="#outer" transform="translate(142 -20) rotate(55)"/></g>
+    <g fill="#62625D"><use href="#middle" transform="translate(-103 32) rotate(-47)"/><use href="#middle" transform="translate(0 -44)"/><use href="#middle" transform="translate(103 32) rotate(47)"/></g>
+    <g fill="#111111"><use href="#inner" transform="translate(-65 72) rotate(-36)"/><use href="#inner" transform="translate(0 25)"/><use href="#inner" transform="translate(65 72) rotate(36)"/><path d="M-40 105H40V121H-40Z"/></g>
+  </g>
+</svg>
