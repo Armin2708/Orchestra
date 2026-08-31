@@ -20,6 +20,7 @@ const wrap = (open: number, close: number): Paint => (text) =>
   enabled ? `\u001b[${open}m${text}\u001b[${close}m` : text
 
 export const bold: Paint = wrap(1, 22)
+export const inverse: Paint = wrap(7, 27)
 export const dim: Paint = wrap(2, 22)
 export const red: Paint = wrap(31, 39)
 export const green: Paint = wrap(32, 39)

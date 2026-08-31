@@ -1003,7 +1003,19 @@ async function splash(): Promise<boolean> {
   return health?.ok === true
 }
 
-if (process.argv.length <= 2) {
+if (process.argv.length <= 2 && process.stdin.isTTY && process.stdout.isTTY) {
+  // bare `orchestra` at a terminal is a session, not a printout: splash, make sure the
+  // daemon is up (detached — quitting the session must not take the daemon down), then
+  // enter the full-screen board. Non-TTY keeps the classic boot path below.
+  void (async () => {
+    const running = await splash()
+    if (!running && !(await ensureDaemon())) { console.error(red('daemon unreachable')); process.exit(1) }
+    const b = await board()
+    const { runTui } = await import('./tui/app.js')
+    await runTui({ api: (method, path) => api(method, path), boardId: b.id })
+    process.exit(0)
+  })().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
+} else if (process.argv.length <= 2) {
   // bare `orchestra` boots the daemon; splash first so status is visible either way
   void splash().then(async (running) => {
     if (running) return
