@@ -132,6 +132,11 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         }
         state.mode = 'connecting'
         log('org-sync', 'connecting to orchestra cloud')
+        // A local resume often reports live within ~100ms — faster than a single
+        // animation frame. The jump still plays for a beat: going to hyperspace and
+        // arriving instantly reads as "nothing happened".
+        const jumpedAt = Date.now()
+        const MIN_HYPER_MS = 1_800
         // A joined-but-not-live loop may be parked terminal after a non-retryable hub
         // failure; the daemon relaunches it on this kick (older daemons 404 — ignore).
         if (before?.joined && before.state !== 'live') {
@@ -143,6 +148,9 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
           state.org = org
           if (org?.state === 'live') {
             log('org-sync', `sync live${org.orgName ? ` (${org.orgName})` : ''}`)
+            const remaining = MIN_HYPER_MS - (Date.now() - jumpedAt)
+            if (remaining > 0) await sleep(remaining) // ticks keep the starfield moving
+            if (state.mode !== 'connecting') return // cancelled mid-jump
             state.mode = 'celebrate'
             setTimeout(() => { if (state.mode === 'celebrate') { state.mode = 'home'; render() } }, 2_500)
             render()
