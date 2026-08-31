@@ -6,6 +6,7 @@ import {
   type CliCredential,
 } from './cli-auth.js'
 import { loadOrgCredential, type OrgCredential } from './org-sync/credentials.js'
+import { dim, green } from './style.js'
 
 export interface CloudSplashDeps {
   loadCliCredential?: () => Promise<CliCredential | null>
@@ -34,11 +35,11 @@ export interface CloudSplashDeps {
 export function cloudStatusLine(
   cli: CliCredential | null, org: OrgCredential | null, sync?: { state: string } | null,
 ): string {
-  if (!cli && !org) return '  ○ not signed in to Orchestra Cloud — local board only'
+  if (!cli && !org) return `  ${dim('○')} not signed in to Orchestra Cloud — local board only`
   const where = org ? syncPhrase(org, sync) : 'no organization connected yet'
-  if (cli) return `  ${sync && sync.state !== 'live' ? '○' : '●'} signed in as ${cli.email} — ${where}`
+  if (cli) return `  ${sync && sync.state !== 'live' ? dim('○') : green('●')} signed in as ${cli.email} — ${where}`
   // A device credential with no sign-in is the `org join --token-stdin` path; nothing is wrong.
-  return `  ● ${where} — this machine is not signed in`
+  return `  ${green('●')} ${where} — this machine is not signed in`
 }
 
 const syncPhrase = (org: OrgCredential, sync?: { state: string } | null): string => {

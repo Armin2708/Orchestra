@@ -1,4 +1,5 @@
 import { Command, InvalidArgumentError } from 'commander'
+import { accent, bold, column as columnColor, dim, green, red, yellow } from './style.js'
 import { ensureDaemon, serve, stopDaemon, waitForDaemonExit, baseUrl } from './daemon.js'
 import { api, projectPath } from './client.js'
 import { buildDemoAction } from './demo-cli.js'
@@ -84,7 +85,7 @@ const providerOption = (allowBoth: boolean) => (value: string) => {
   return value
 }
 
-async function up() { if (!(await ensureDaemon())) { console.error('daemon unreachable'); process.exit(1) } }
+async function up() { if (!(await ensureDaemon())) { console.error(red('daemon unreachable')); process.exit(1) } }
 async function board() {
   try {
     return await api('POST', '/boards/resolve', { project_path: projectPath() })
@@ -522,9 +523,9 @@ program.command('join').description('register this agent session on the project 
 
 const card = program.command('card')
 const printOverlaps = (overlaps: any[], similar: any[] = [], doneSimilar: any[] = []) => {
-  for (const o of overlaps) console.log(`⚠ overlap with card #${o.id} "${o.title}" (${o.owner}) on ${o.paths.join(', ')}`)
-  for (const s of similar) console.log(`≈ similar work in progress: card #${s.id} "${s.title}" (${s.owner}) — check with them before proceeding: orchestra ask ${s.owner} "..."`)
-  for (const d of doneSimilar) console.log(`≈ looks already shipped: card #${d.id} "${d.title}" (done) — verify with git log before starting`)
+  for (const o of overlaps) console.log(`${yellow('⚠')} overlap with card ${accent(`#${o.id}`)} "${o.title}" ${dim(`(${o.owner}) on ${o.paths.join(', ')}`)}`)
+  for (const s of similar) console.log(`${yellow('≈')} similar work in progress: card ${accent(`#${s.id}`)} "${s.title}" (${s.owner}) — ${dim(`check with them before proceeding: orchestra ask ${s.owner} "..."`)}`)
+  for (const d of doneSimilar) console.log(`${yellow('≈')} looks already shipped: card ${accent(`#${d.id}`)} "${d.title}" (done) — ${dim('verify with git log before starting')}`)
 }
 card.command('create <title>').option('--desc <d>').option('--paths <p>', '', csv)
   .option('--column <c>').option('--agent <a>')
@@ -533,18 +534,18 @@ card.command('create <title>').option('--desc <d>').option('--paths <p>', '', cs
     await up(); const b = await board()
     // commander maps --no-owner to o.owner === false
     const r = await api('POST', '/cards', { board_id: b.id, title, description: o.desc, paths: o.paths, column: o.column, agent: o.owner === false ? undefined : await inferAgent(b.id, o.agent) })
-    console.log(`card #${r.card.id} created [${r.card.column}]`); printOverlaps(r.overlaps, r.similar, r.done_similar)
+    console.log(`card ${accent(`#${r.card.id}`)} created [${columnColor(r.card.column)}]`); printOverlaps(r.overlaps, r.similar, r.done_similar)
   })
 card.command('update <id>').option('--title <t>').option('--desc <d>').option('--paths <p>', '', csv)
   .option('--column <c>').option('--agent <a>').action(async (id, o) => {
     await up()
     const r = await api('PATCH', `/cards/${id}`, { title: o.title, description: o.desc, paths: o.paths, column: o.column, agent: o.agent ?? envAgent() })
-    console.log(`card #${r.card.id} updated [${r.card.column}]`); printOverlaps(r.overlaps, r.similar, r.done_similar)
+    console.log(`card ${accent(`#${r.card.id}`)} updated [${columnColor(r.card.column)}]`); printOverlaps(r.overlaps, r.similar, r.done_similar)
   })
 card.command('move <id> <column>').option('--agent <a>').action(async (id, column, o) => {
   await up()
   const r = await api('POST', `/cards/${id}/move`, { column, agent: o.agent ?? envAgent() })
-  console.log(`card #${r.card.id} → ${r.card.column}`)
+  console.log(`card ${accent(`#${r.card.id}`)} → ${columnColor(r.card.column)}`)
 })
 card.command('rank <id>')
   .option('--before <id>', 'place above this backlog card')
@@ -557,7 +558,7 @@ card.command('rank <id>')
       after: o.after ? Number(o.after) : undefined,
       top: !!o.top, bottom: !!o.bottom, agent: o.agent ?? envAgent(),
     })
-    console.log(`card #${r.card.id} ranked (${r.card.rank})`)
+    console.log(`card ${accent(`#${r.card.id}`)} ranked ${dim(`(${r.card.rank})`)}`)
   })
 
 program.command('next').option('--agent <a>')
@@ -566,9 +567,9 @@ program.command('next').option('--agent <a>')
     await up(); const b = await board()
     try {
       const r = await api('POST', `/boards/${b.id}/next`, { agent: await inferAgent(b.id, o.agent) })
-      console.log(`card #${r.card.id} → in_progress (${r.card.owner ?? 'unowned'}): ${r.card.title}`)
+      console.log(`card ${accent(`#${r.card.id}`)} → ${columnColor('in_progress')} ${dim(`(${r.card.owner ?? 'unowned'})`)}: ${bold(r.card.title)}`)
     } catch {
-      console.log('no ready cards — groom the backlog (cards need a contract + rank)')
+      console.log(dim('no ready cards — groom the backlog (cards need a contract + rank)'))
     }
   })
 
@@ -578,7 +579,7 @@ program.command('ask <to> [body]').option('--card <id>').option('--from <a>')
     const text = await messageBody(body, o.stdin)
     await up(); const b = await board()
     const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), to, kind: 'ask', body: text, card_id: o.card ? Number(o.card) : undefined })
-    console.log(`asked ${to} (msg #${m.id})`)
+    console.log(`asked ${bold(to)} ${dim(`(msg #${m.id})`)}`)
   })
 // '#12' → card, hex → commit, http(s) → url, anything else → repo-relative file path
 const parseAttachment = (ref: string) => {
@@ -604,7 +605,7 @@ program.command('mail <subject> [body]')
       attachments: o.attach?.length ? o.attach.map(parseAttachment) : undefined,
       card_id: o.card ? Number(o.card) : undefined,
     })
-    console.log(`mailed the operator (msg #${m.id})`)
+    console.log(`mailed the operator ${dim(`(msg #${m.id})`)}`)
   })
 program.command('reply <msgId> [body]').option('--from <a>')
   .option('--stdin', 'read the body from stdin (no shell interpolation)')
@@ -612,7 +613,7 @@ program.command('reply <msgId> [body]').option('--from <a>')
     const text = await messageBody(body, o.stdin)
     await up(); const b = await board()
     const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), kind: 'reply', body: text, reply_to: Number(msgId) })
-    console.log(`replied (msg #${m.id})`)
+    console.log(`replied ${dim(`(msg #${m.id})`)}`)
   })
 
 program.command('pulse').option('--agent-id <id>').action(async (o) => {
@@ -629,14 +630,14 @@ program.command('snapshot').option('--board <id>').option('--full', 'complete bo
   const snap = await api('GET', `/boards/${b.id}/snapshot`)
   if (o.full) return console.log(JSON.stringify(snap, null, 2))
   const active = snap.agents.filter((a: any) => a.status !== 'gone')
-  console.log(`board "${snap.board.name}" — ${active.length} active agent(s): ${active.map((a: any) => a.name).join(', ') || '-'}`)
+  console.log(`board ${bold(`"${snap.board.name}"`)} — ${active.length} active agent(s): ${dim(active.map((a: any) => a.name).join(', ') || '-')}`)
   for (const c of snap.cards.filter((c: any) => c.column !== 'done'))
-    console.log(`#${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) paths: ${c.paths.join(', ') || '-'}`)
+    console.log(`${accent(`#${c.id}`)} [${columnColor(c.column)}] "${c.title}" ${dim(`(${c.owner ?? 'unowned'}) paths: ${c.paths.join(', ') || '-'}`)}`)
   for (const q of snap.open_questions)
-    console.log(`Q#${q.id} ${q.from_name ?? 'human'} → ${q.to_name ?? 'all'}: ${q.body.length > 140 ? q.body.slice(0, 140) + '…' : q.body}`)
+    console.log(`${accent(`Q#${q.id}`)} ${bold(`${q.from_name ?? 'human'} → ${q.to_name ?? 'all'}`)}: ${q.body.length > 140 ? q.body.slice(0, 140) + '…' : q.body}`)
   for (const m of (snap.dead_letters ?? []).filter((m: any) => !m.bounced))
-    console.log(`✖#${m.id} undelivered to ${m.to_name} (gone), from ${m.from_name ?? 'human'}: ${m.body.length > 100 ? m.body.slice(0, 100) + '…' : m.body}`)
-  console.log(`(descriptions, milestones, ideas, threads: orchestra snapshot --full)`)
+    console.log(`${red(`✖#${m.id}`)} undelivered to ${m.to_name} (gone), from ${m.from_name ?? 'human'}: ${m.body.length > 100 ? m.body.slice(0, 100) + '…' : m.body}`)
+  console.log(dim(`(descriptions, milestones, ideas, threads: orchestra snapshot --full)`))
 })
 
 program.command('idea <text>').description('add a roadmap idea (first line = title)')
@@ -644,13 +645,13 @@ program.command('idea <text>').description('add a roadmap idea (first line = tit
   .action(async (text, o) => {
     await up(); const b = await board()
     const i = await api('POST', '/ideas', { board_id: b.id, text: o.desc ? `${text}\n${o.desc}` : text })
-    console.log(`idea #${i.id} added to the roadmap`)
+    console.log(`idea ${accent(`#${i.id}`)} added to the roadmap`)
   })
 program.command('idea-done <id>').description('remove a roadmap idea (after converting it to a ticket)')
   .action(async (id) => {
     await up()
     await api('DELETE', `/ideas/${id}`)
-    console.log(`idea #${id} removed from the roadmap`)
+    console.log(`idea ${accent(`#${id}`)} removed from the roadmap`)
   })
 const team = program.command('team').description('design, propose, and inspect agent teams')
 team.command('propose <name>').description('submit a TeamSpec JSON as a draft team for operator approval')
@@ -671,7 +672,7 @@ team.command('list').description('list teams on this board with status and live 
     const r = await api('GET', `/boards/${b.id}/teams`)
     for (const t of r.teams ?? []) {
       const members = t.members.map((m: any) => `${m.name}(${m.team_role ?? '?'})`).join(', ')
-      console.log(`#${t.id} ${t.name} [${t.status}] roles:${t.spec.roles.length}${members ? ` live: ${members}` : ''}`)
+      console.log(`${accent(`#${t.id}`)} ${bold(t.name)} [${t.status}] ${dim(`roles:${t.spec.roles.length}${members ? ` live: ${members}` : ''}`)}`)
     }
   })
 team.command('design <goal>').description('hand a goal to the mastermind agent; it drafts a team for approval')
@@ -721,7 +722,7 @@ team.command('assign <cardId> <teamId>').description('assign a card to a team; t
 program.command('ideas').description('list roadmap ideas').action(async () => {
   await up(); const b = await board()
   const snap = await api('GET', `/boards/${b.id}/snapshot`)
-  for (const i of snap.ideas ?? []) console.log(`#${i.id} ${i.text.split('\n')[0]}`)
+  for (const i of snap.ideas ?? []) console.log(`${accent(`#${i.id}`)} ${i.text.split('\n')[0]}`)
 })
 
 program.command('shipped <cardId> <hash>').description('record the merge commit that shipped a card')
@@ -729,7 +730,7 @@ program.command('shipped <cardId> <hash>').description('record the merge commit 
     await up()
     const r = await api('POST', `/cards/${cardId}/shipped`, { hash, by: o.from ?? envAgent() })
     const p = JSON.parse(r.event.payload)
-    console.log(`card #${cardId} shipped @ ${p.hash} "${p.subject}"${r.created ? '' : ' (already recorded)'}`)
+    console.log(`card ${accent(`#${cardId}`)} shipped @ ${green(p.hash)} "${p.subject}"${r.created ? '' : dim(' (already recorded)')}`)
   })
 
 program.command('note [text]').description('post a note to the board (visible to everyone as a thread)')
@@ -739,7 +740,7 @@ program.command('note [text]').description('post a note to the board (visible to
     const body = await messageBody(text, o.stdin)
     await up(); const b = await board()
     const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), kind: 'announce', body })
-    console.log(`note posted (msg #${m.id})`)
+    console.log(`note posted ${dim(`(msg #${m.id})`)}`)
   })
 
 program.command('remember <text>').description('save a session memory note (injected into future sessions on this board)')
