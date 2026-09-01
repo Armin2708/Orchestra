@@ -210,7 +210,7 @@ describe('BASE-010 declared-provider compatibility contract', () => {
       executable: {
         source: 'path',
         command_override_env: 'ORCHESTRA_OPENCODE_COMMAND',
-        exact_versions: ['1.18.25'],
+        exact_versions: ['1.18.23', '1.18.25'],
         exact_platforms: ['darwin-arm64'],
       },
       native_subscription: {

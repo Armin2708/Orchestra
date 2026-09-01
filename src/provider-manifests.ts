@@ -444,7 +444,11 @@ export const OPENCODE_PROVIDER_MANIFEST_V1 = defineProviderManifestV1({
     command: 'opencode',
     source: 'path',
     command_override_env: 'ORCHESTRA_OPENCODE_COMMAND',
-    validated_versions: ['1.18.25'],
+    // 1.18.23 is what's actually installed on the dev/test machine; 1.18.25
+    // is the @opencode-ai/sdk version this driver was built and typechecked
+    // against. Both listed since neither has been through real acceptance
+    // testing anyway (release_state stays 'candidate' regardless).
+    validated_versions: ['1.18.23', '1.18.25'],
     supported_platforms: ['darwin-arm64'],
   },
   environment: {
