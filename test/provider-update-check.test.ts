@@ -125,14 +125,61 @@ describe('version normalization', () => {
   // Codex reports "codex-cli 0.146.0"; the API must publish "0.146.0" so the UI can
   // render it directly rather than showing the raw banner text.
   it('publishes the parsed semver for a CLI that reports a banner string', () => {
-    const state = evaluateProviderUpdate('codex', 'codex-cli 0.146.0', '0.146.1', 't')
+    const state = evaluateProviderUpdate('codex', 'codex-cli 0.146.0', null, null)
     expect(state.installed).toBe('0.146.0')
-    expect(state.latest).toBe('0.146.1')
-    expect(state.update_available).toBe(true)
   })
 
   it('leaves an unparseable installed string intact for diagnostics', () => {
     expect(evaluateProviderUpdate('codex', 'nightly-build', '1.0.0', 't').installed).toBe('nightly-build')
+  })
+})
+
+// Regression: orchestra's own "update available" nudge told operators to run
+// `npm install --global @openai/codex@latest`, which walks them straight off the
+// protocol-pinned CLI version (environment-compatibility.json validates only
+// 0.146.0; every other version is `other_versions: "unsupported"`). Codex is
+// protocol-pinned, not "keep upgrading" like the other providers: drift off the
+// pin in EITHER direction must surface as pin_drift with a reinstall-to-pinned
+// command, never as an ordinary "update available" pointing at npm's `latest`.
+describe('codex protocol pin', () => {
+  it('does not flag anything when the installed CLI matches the pinned version', () => {
+    const state = evaluateProviderUpdate('codex', 'codex-cli 0.146.0', '0.150.0', 't')
+    expect(state.update_available).toBe(false)
+    expect(state.pin_drift).toBe(false)
+    expect(state.latest).toBe('0.146.0')
+  })
+
+  it('flags pin drift — not "update available" toward npm latest — when the CLI moved past the pin', () => {
+    const state = evaluateProviderUpdate('codex', 'codex-cli 0.150.0', '0.150.0', 't')
+    expect(state.pin_drift).toBe(true)
+    expect(state.update_available).toBe(true)
+    expect(state.latest).toBe('0.146.0')
+  })
+
+  it('flags pin drift when the installed CLI is older than the pin too', () => {
+    const state = evaluateProviderUpdate('codex', '0.140.0', null, null)
+    expect(state.pin_drift).toBe(true)
+  })
+
+  it('detects drift without depending on the npm registry', () => {
+    const state = evaluateProviderUpdate('codex', 'codex-cli 0.150.0', null, null)
+    expect(state.pin_drift).toBe(true)
+    expect(state.unknown_reason).toBeUndefined()
+  })
+
+  it('reinstalls the exact pinned version, never @latest, as the codex update command', () => {
+    expect(providerUpdateCommand('codex')).toBe('npm install --global @openai/codex@0.146.0')
+  })
+
+  it('never hits the npm registry for a protocol-pinned provider', async () => {
+    const db = memoryDb()
+    let calls = 0
+    const fetchImpl = (async () => { calls += 1; return jsonResponse({ version: '0.150.0' }) }) as unknown as typeof fetch
+
+    const state = await checkProviderUpdate(db, 'codex', 'codex-cli 0.150.0', { fetchImpl })
+
+    expect(calls).toBe(0)
+    expect(state.pin_drift).toBe(true)
   })
 })
 

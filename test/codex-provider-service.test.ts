@@ -117,3 +117,67 @@ describe('Codex provider service', () => {
     service.dispose()
   })
 })
+
+// Regression: initialize() only classifies the CLI version once, at daemon boot.
+// If codex updates itself while the daemon keeps running, health stayed stale
+// "ready" until the next restart — the operator found out from a confusing
+// runtime failure instead of a clear signal. recheckVersion() re-probes on a
+// timer so drift is caught within one tick.
+describe('CodexProviderService.recheckVersion', () => {
+  const authenticatedRpc = () => ({
+    listModels: async () => [],
+    readAccount: async () => ({ account: { type: 'apiKey' }, requiresOpenaiAuth: true }),
+    readRateLimits: async () => ({}) as any,
+    readUsage: async () => ({}) as any,
+  })
+
+  it('flips health from ready to unavailable when the CLI drifts off the pin', async () => {
+    const db = openDb(':memory:')
+    let probed = 'codex-cli 0.146.0'
+    const service = new CodexProviderService(db, authenticatedRpc(), new FakeSupervisor(), {
+      version: 'codex-cli 0.146.0',
+      versionProbe: () => probed,
+    })
+    expect(await service.initialize()).toBe(true)
+    expect(service.isRuntimeAvailable()).toBe(true)
+
+    probed = 'codex-cli 0.150.0'
+    expect(service.recheckVersion()).toBe(true)
+
+    expect(service.isRuntimeAvailable()).toBe(false)
+    expect(await service.health()).toMatchObject({
+      status: 'unavailable',
+      detail: expect.stringContaining('0.150.0'),
+    })
+    service.dispose()
+  })
+
+  it('does nothing when the CLI still matches the pin', async () => {
+    const db = openDb(':memory:')
+    const service = new CodexProviderService(db, authenticatedRpc(), new FakeSupervisor(), {
+      version: 'codex-cli 0.146.0',
+      versionProbe: () => 'codex-cli 0.146.0',
+    })
+    expect(await service.initialize()).toBe(true)
+
+    expect(service.recheckVersion()).toBe(false)
+
+    expect(service.isRuntimeAvailable()).toBe(true)
+    service.dispose()
+  })
+
+  it('reports no change on a repeat check once already flagged unavailable', async () => {
+    const db = openDb(':memory:')
+    let probed = 'codex-cli 0.146.0'
+    const service = new CodexProviderService(db, authenticatedRpc(), new FakeSupervisor(), {
+      version: 'codex-cli 0.146.0',
+      versionProbe: () => probed,
+    })
+    expect(await service.initialize()).toBe(true)
+    probed = 'codex-cli 0.150.0'
+    expect(service.recheckVersion()).toBe(true)
+
+    expect(service.recheckVersion()).toBe(false)
+    service.dispose()
+  })
+})
