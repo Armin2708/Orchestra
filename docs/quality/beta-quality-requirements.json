@@ -227,7 +227,7 @@
     "test/provider-agent-manager.test.ts",
     "test/runtime-pty-contract.test.ts"
   ],
-  "state_machine_discovery_sha256": "59d99f0dd4c787beec4064a173e7730454bb647b50987cb9cecf8043c6e4887f",
+  "state_machine_discovery_sha256": "774a136b3e1b36dd72d7fdf62817518b128668620e1ea196b0e768d9bd0610cf",
   "classified_state_machine_files": [
     "src/agent-os-cli.ts",
     "src/agent-os/agent-home-lifecycle.ts",
@@ -288,6 +288,7 @@
     "src/remote.ts",
     "src/runtime/drivers/claude.ts",
     "src/runtime/drivers/codex.ts",
+    "src/runtime/drivers/opencode.ts",
     "src/runtime/drivers/qwen.ts",
     "src/runtime/supervisor.ts",
     "src/runtime/types.ts",

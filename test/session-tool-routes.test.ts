@@ -60,7 +60,7 @@ describe('session tool routes', () => {
     const { server, db } = await fixture()
     const matrix = await server.inject({ method: 'GET', url: '/api/v1/os/provider-tool-capabilities' })
     expect(matrix.statusCode).toBe(200)
-    expect(matrix.json().providers).toHaveLength(4)
+    expect(matrix.json().providers).toHaveLength(5)
 
     const read = await server.inject({ method: 'GET', url: '/api/v1/os/sessions/route-session/tools' })
     expect(read.statusCode).toBe(200)

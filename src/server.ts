@@ -41,7 +41,7 @@ import {
 } from './agent-os/delivery-trackbook.js'
 import { requireIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
-import { CODEX_PROVIDER_ID, QWEN_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
+import { CODEX_PROVIDER_ID, OPENCODE_PROVIDER_ID, QWEN_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
 import {
   ACCESS_PROFILES,
   ProviderUnavailableError,
@@ -1776,7 +1776,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         const orchestration = opts.agentOs?.orchestration
         if (!orchestration) throw new UnsupportedError('canonical orchestration service is not available')
         const provider = (req.body?.provider ?? defaultsForRole(db).provider).trim().toLowerCase()
-        if (provider !== 'claude' && provider !== CODEX_PROVIDER_ID && provider !== QWEN_PROVIDER_ID) {
+        if (provider !== 'claude' && provider !== CODEX_PROVIDER_ID && provider !== QWEN_PROVIDER_ID
+          && provider !== OPENCODE_PROVIDER_ID) {
           throw new ProviderUnavailableError(provider, 'no registered Agent OS agent provider driver')
         }
         const jobExecutor = opts.agentOs?.jobExecutor

@@ -6,8 +6,10 @@ import { defaultsForRole, type SpecialistRole } from './agent-defaults.js'
 import {
   CODEX_PROVIDER_ID,
   QWEN_PROVIDER_ID,
+  OPENCODE_PROVIDER_ID,
   codexProviderCatalog,
   qwenProviderCatalog,
+  openCodeProviderCatalog,
   readProviderModelCache,
   type AgentProviderCapabilities,
   type AgentProviderCatalog,
@@ -65,6 +67,26 @@ export const CLAUDE_CAPABILITIES: AgentProviderCapabilities = {
 }
 
 export const QWEN_CAPABILITIES: AgentProviderCapabilities = {
+  steering: false,
+  approvals: false,
+  model: true,
+  effort: false,
+  rate_limits: false,
+  usage: true,
+  diffs: false,
+  plans: false,
+  subagents: false,
+  ambient_hooks: false,
+  session_end_hooks: false,
+  access_profile: false,
+  interrupt: true,
+  stop: true,
+}
+
+// Unlike Qwen, OpenCode's driver surfaces real per-message cost/token usage
+// straight off `AssistantMessage.cost`/`.tokens` (see OPENCODE_NATIVE_CAPABILITIES
+// in provider-manifests.ts, which marks `usage: supported()` for this reason).
+export const OPENCODE_CAPABILITIES: AgentProviderCapabilities = {
   steering: false,
   approvals: false,
   model: true,
@@ -1695,6 +1717,736 @@ export class QwenManagedAgentRuntime {
   }
 }
 
+type OpenCodeState = {
+  agentId: number
+  boardId: number
+  name: string
+  cwd: string
+  role?: SpecialistRole
+  ephemeral: boolean
+  model: string | null
+  effort: string | null
+  accessProfile: AccessProfile
+  session: DriverSession | null
+  queue: string[]
+  transcript: TranscriptLine[]
+  usageTotal: ProviderUsageSplit
+  turnActive: boolean
+  idleWaiters: Array<() => void>
+  cardId: number | null
+  branch: string | null
+  cardFinalized: boolean
+  ended: boolean
+  stopping: boolean
+  detaching: boolean
+  sending: Promise<void>
+  lastEventSeq: number
+  rateLimitPause: { at: string } | null
+  credentialSessionId: string | null
+}
+
+const emptyOpenCodeUsage = (): ProviderUsageSplit => ({
+  provider: OPENCODE_PROVIDER_ID,
+  total_tokens: 0,
+  input_tokens: 0,
+  cached_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  output_tokens: 0,
+  reasoning_output_tokens: 0,
+  cost_cents: null,
+})
+
+const openCodeUsageNumber = (value: unknown): number =>
+  Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0
+
+// OpenCode reports each assistant message's own cumulative token/cost totals
+// straight off `AssistantMessage.tokens`/`.cost` (no reconstruction needed,
+// unlike Qwen's separate stream-json result event). Persisted totals revive
+// the same way Qwen's/Codex's do.
+const fromOpenCodeMessageUsage = (raw: Record<string, unknown>): ProviderUsageSplit => {
+  const input = openCodeUsageNumber(raw.input_tokens)
+  const cached = Math.min(openCodeUsageNumber(raw.cache_read_tokens), input)
+  const output = openCodeUsageNumber(raw.output_tokens)
+  const reasoning = openCodeUsageNumber(raw.reasoning_tokens)
+  const cost = openCodeUsageNumber(raw.cost)
+  return {
+    provider: OPENCODE_PROVIDER_ID,
+    total_tokens: input + output,
+    input_tokens: input,
+    cached_input_tokens: cached,
+    cache_creation_input_tokens: openCodeUsageNumber(raw.cache_write_tokens),
+    output_tokens: output,
+    reasoning_output_tokens: Math.min(reasoning, output),
+    cost_cents: cost > 0 ? Math.round(cost * 100) : null,
+  }
+}
+
+/**
+ * Board-facing lifecycle for OpenCode sessions.
+ *
+ * Structural divergence from Qwen (driven by the real `OpenCodeAgentDriver`
+ * API in `runtime/drivers/opencode.ts`, not a stylistic choice): OpenCode's
+ * `launch()` always creates a brand-new session and never accepts an
+ * `externalId` to resume one — resume is `recover()`-only (`session.get()` by
+ * id). Qwen's driver instead resumes through `launch()` itself with an
+ * `externalId`. `start()` below branches accordingly.
+ */
+export class OpenCodeManagedAgentRuntime {
+  private readonly states = new Map<number, OpenCodeState>()
+
+  constructor(
+    private readonly db: Database.Database,
+    private readonly bus: EventEmitter,
+    private readonly driver: AgentDriver,
+  ) {
+    if (driver.id !== OPENCODE_PROVIDER_ID) throw new Error(`expected opencode driver, got ${driver.id}`)
+  }
+
+  isHired(agentId: number): boolean {
+    const state = this.states.get(agentId)
+    return !!state && !state.ended
+  }
+
+  hire(options: ProviderHireOptions): any {
+    const existingLive = options.name
+      ? [...this.states.values()].find((state) => !state.ended && state.boardId === options.boardId && state.name === options.name)
+      : undefined
+    if (existingLive) return this.agent(existingLive.agentId)
+
+    let name = options.name
+    if (!name && options.role === 'verifier') {
+      name = testerName((candidate) => !!this.db.prepare(
+        "SELECT 1 FROM agents WHERE board_id=? AND name=? AND status<>'gone'").get(options.boardId, candidate))
+    }
+    if (!name) {
+      do { name = generateName() } while (
+        this.db.prepare('SELECT 1 FROM agents WHERE board_id=? AND name=?').get(options.boardId, name))
+    }
+    const existing = this.db.prepare('SELECT id, provider, status, provider_state_json FROM agents WHERE board_id=? AND name=?')
+      .get(options.boardId, name) as { id: number; provider: string; status: string; provider_state_json: string } | undefined
+    if (existing && existing.provider !== OPENCODE_PROVIDER_ID && existing.status !== 'gone')
+      throw new Error(`agent ${name} already belongs to provider ${existing.provider}`)
+
+    const resumeSession = options.resumeSession?.trim() || undefined
+    if (resumeSession) this.assertResumeOwnership(resumeSession, existing?.id)
+    const prior = resumeSession ? parseObject(existing?.provider_state_json) : {}
+    const accessProfile = options.accessProfile ?? (options.role ? 'read_only' : 'full_access')
+    const stateJson = JSON.stringify({
+      ...prior,
+      cwd: options.cwd,
+      card_id: options.cardId ?? null,
+      lifecycle: 'starting',
+    })
+    this.db.prepare(`
+      INSERT INTO agents (
+        board_id, name, session_id, kind, role, status, provider, external_session_id,
+        provider_state_json, access_profile, model, effort
+      ) VALUES (?, ?, ?, 'hired', ?, 'starting', 'opencode', ?, ?, ?, ?, ?)
+      ON CONFLICT(board_id, name) DO UPDATE SET
+        session_id=excluded.session_id, kind='hired', role=excluded.role, status='starting',
+        provider='opencode', external_session_id=excluded.external_session_id,
+        sdk_session=NULL, hook_token_hash=NULL,
+        provider_state_json=excluded.provider_state_json, access_profile=excluded.access_profile,
+        model=excluded.model, effort=excluded.effort, last_seen=datetime('now')
+    `).run(
+      options.boardId,
+      name,
+      `hired:opencode:${Date.now()}`,
+      options.role ?? null,
+      resumeSession ?? null,
+      stateJson,
+      accessProfile,
+      options.model ?? null,
+      options.effort ?? null,
+    )
+    const row = this.db.prepare('SELECT * FROM agents WHERE board_id=? AND name=?').get(options.boardId, name) as any
+    const persistedUsage = prior.usage_total && typeof prior.usage_total === 'object'
+      ? fromOpenCodeMessageUsage(prior.usage_total as Record<string, unknown>)
+      : emptyOpenCodeUsage()
+    const state: OpenCodeState = {
+      agentId: Number(row.id),
+      boardId: options.boardId,
+      name,
+      cwd: options.cwd,
+      role: options.role,
+      ephemeral: options.ephemeral ?? false,
+      model: options.model ?? null,
+      effort: options.effort ?? null,
+      accessProfile,
+      session: null,
+      queue: [],
+      transcript: [],
+      usageTotal: persistedUsage,
+      turnActive: false,
+      idleWaiters: [],
+      cardId: options.cardId ?? null,
+      branch: null,
+      cardFinalized: false,
+      ended: false,
+      stopping: false,
+      detaching: false,
+      sending: Promise.resolve(),
+      lastEventSeq: 0,
+      rateLimitPause: prior.rate_limit_pause && typeof prior.rate_limit_pause === 'object'
+        ? prior.rate_limit_pause as { at: string }
+        : null,
+      credentialSessionId: null,
+    }
+    this.states.set(state.agentId, state)
+    this.log(state, 'status', resumeSession ? `resumed in ${options.cwd} (previous session continues)` : `hired in ${options.cwd}`)
+    this.emitAgent(state)
+    void this.start(state, resumeSession).catch((error) => this.failStart(state, error))
+    return row
+  }
+
+  launch(request: ProviderLaunchRequest): any {
+    let cwd = request.cwd
+    let branch: string | null = null
+    if (autoshipEnabled()) {
+      const branchName = `card-${request.cardId}`
+      const worktree = cardWorktree(request.cwd, request.cardId)
+      try {
+        if (!existsSync(worktree)) {
+          try { execFileSync('git', ['worktree', 'add', worktree, '-b', branchName], { cwd: request.cwd, timeout: 30_000 }) }
+          catch { execFileSync('git', ['worktree', 'add', worktree, branchName], { cwd: request.cwd, timeout: 30_000 }) }
+        }
+        cwd = worktree
+        branch = branchName
+      } catch { /* shared checkout remains usable when worktree creation is unavailable */ }
+    }
+    const agent = this.hire({
+      boardId: request.boardId,
+      cwd,
+      provider: OPENCODE_PROVIDER_ID,
+      model: request.model,
+      effort: request.effort,
+      accessProfile: request.accessProfile,
+      cardId: request.cardId,
+    })
+    const state = this.required(agent.id)
+    state.branch = branch
+    this.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', branch=?, updated_at=datetime('now') WHERE id=?`)
+      .run(agent.id, branch, request.cardId)
+    this.cardEvent(request.cardId, agent.id, 'launched', { agent: agent.name, provider: OPENCODE_PROVIDER_ID })
+    this.bus.emit('event', { board_id: request.boardId, type: 'card', data: this.card(request.cardId) })
+    this.bus.emit('event', {
+      board_id: request.boardId,
+      type: 'launch',
+      data: { card_id: request.cardId, agent_id: agent.id, agent_name: agent.name, provider: OPENCODE_PROVIDER_ID, status: 'started' },
+    })
+    this.task(agent.id, request.brief)
+    return { agent: this.agent(agent.id), card: this.card(request.cardId) }
+  }
+
+  isLaunched(cardId: number): boolean {
+    return [...this.states.values()].some((state) => !state.ended && state.cardId === cardId)
+  }
+
+  adoptLaunch(agentId: number): void {
+    const state = this.states.get(agentId)
+    if (!state || state.cardId !== null) return
+    const card = this.db.prepare(`SELECT c.id, c.branch FROM cards c
+      JOIN card_events e ON e.card_id=c.id AND e.type='launched' AND e.agent_id=?
+      WHERE c.owner_agent_id=? AND c.column_name='in_progress' ORDER BY e.id DESC LIMIT 1`)
+      .get(agentId, agentId) as { id: number; branch: string | null } | undefined
+    if (card) { state.cardId = card.id; state.branch = card.branch }
+  }
+
+  task(agentId: number, text: string): boolean {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !text) return false
+    this.log(state, 'user', text)
+    state.queue.push(text)
+    this.flush(state)
+    return true
+  }
+
+  deliver(agentId: number, message: any): boolean {
+    const from = message?.from_name ? ` from ${message.from_name}` : ''
+    const prefix = message?.kind === 'notify' ? 'notification' : message?.kind === 'task' ? 'task' : 'message'
+    return this.task(agentId, `orchestra ${prefix}${from}: ${String(message?.body ?? '')}`)
+  }
+
+  transcript(agentId: number): any {
+    const state = this.states.get(agentId)
+    if (!state) return { lines: [], working: null }
+    const resolvedModel = typeof state.session?.metadata.effectiveModel === 'string'
+      ? state.session.metadata.effectiveModel
+      : state.model
+    return {
+      lines: state.transcript,
+      working: state.turnActive ? { secs: 0, tokens: 0 } : null,
+      info: {
+        provider: OPENCODE_PROVIDER_ID,
+        capabilities: enabledCapabilities(OPENCODE_CAPABILITIES),
+        accessProfile: state.accessProfile,
+        model: state.model,
+        requestedModel: state.model,
+        resolvedModel,
+        effort: null,
+        resolvedEffort: null,
+        cwd: state.cwd,
+        tokens: state.usageTotal.total_tokens,
+        usage: { session: state.usageTotal },
+        models: readProviderModelCache(this.db, OPENCODE_PROVIDER_ID)?.models ?? [],
+        permissionMode: permissionModeForAccess(state.accessProfile),
+      },
+      permissions: [],
+    }
+  }
+
+  subagents(): { key: string; label: string }[] {
+    return []
+  }
+
+  async interruptAgent(agentId: number): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !state.session) return false
+    await this.driver.interrupt(state.session.id)
+    if (!state.rateLimitPause)
+      this.db.prepare("UPDATE agents SET status='idle', last_seen=datetime('now') WHERE id=? AND status='active'").run(agentId)
+    this.log(state, 'status', 'interrupted by user')
+    this.persist(state)
+    return true
+  }
+
+  async fire(agentId: number): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended) return false
+    state.stopping = true
+    if (state.session) await this.driver.stop(state.session.id).catch(() => undefined)
+    this.finish(state, state.cardId !== null && !state.cardFinalized ? 'error' : 'success', 'stopped by user')
+    return true
+  }
+
+  async setModel(agentId: number, model: string): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !model.trim()) return false
+    state.model = model.trim()
+    this.db.prepare('UPDATE agents SET model=? WHERE id=?').run(state.model, agentId)
+    this.log(state, 'status', `model → ${state.model} (takes effect next turn)`)
+    this.persist(state)
+    return true
+  }
+
+  async setEffort(agentId: number, _level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended) return 'not-found'
+    // OpenCode exposes no effort/reasoning-level control
+    return 'bad-level'
+  }
+
+  async setAccessProfile(agentId: number, profile: AccessProfile): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !isAccessProfile(profile)) return false
+    state.accessProfile = profile
+    this.db.prepare('UPDATE agents SET access_profile=? WHERE id=?').run(profile, agentId)
+    this.log(state, 'status', `access profile → ${profile} (recorded; OpenCode non-interactive runs stay in auto mode)`)
+    this.persist(state)
+    return true
+  }
+
+  async resolvePermission(): Promise<boolean> {
+    return false
+  }
+
+  async resolveApproval(): Promise<boolean> {
+    return false
+  }
+
+  async shutdown(): Promise<void> {
+    await Promise.allSettled([...this.states.values()].filter((state) => !state.ended).map(async (state) => {
+      state.detaching = true
+      this.persist(state)
+    }))
+  }
+
+  private async start(state: OpenCodeState, externalId?: string): Promise<void> {
+    const metadata = {
+      agentId: state.agentId,
+      cardId: state.cardId,
+      role: state.role ?? null,
+      effort: state.effort,
+    }
+    const session = externalId
+      ? await (this.driver.recover
+        ? this.driver.recover({
+            externalId,
+            workspaceId: `legacy-agent:${state.agentId}`,
+            cwd: state.cwd,
+            ...(state.model ? { model: state.model } : {}),
+            accessProfile: state.accessProfile,
+            metadata,
+          })
+        : Promise.resolve(null))
+      : await this.driver.launch({
+          workspaceId: `legacy-agent:${state.agentId}`,
+          boardId: state.boardId,
+          cwd: state.cwd,
+          name: state.name,
+          ...(state.model ? { model: state.model } : {}),
+          accessProfile: state.accessProfile,
+          metadata,
+        })
+    if (!session) {
+      this.failStart(state, new Error(`OpenCode session ${externalId} could not be resumed`))
+      return
+    }
+    if (state.ended || state.detaching) {
+      state.session = session
+      this.db.prepare(`UPDATE agents SET external_session_id=?, last_seen=datetime('now') WHERE id=?`)
+        .run(session.externalId || null, state.agentId)
+      await this.driver.stop(session.id).catch(() => undefined)
+      this.persist(state)
+      return
+    }
+    state.session = session
+    // OpenCode's session.create/session.get always return a real id up front —
+    // unlike Qwen, there is no later stream event that first binds it.
+    this.db.prepare(`UPDATE agents SET status='idle', external_session_id=?,
+      last_seen=datetime('now') WHERE id=?`).run(session.externalId || null, state.agentId)
+    this.ensureLegacyCollaborationSession(state, session)
+    this.ensureCredential(state)
+    this.log(state, 'status', `session started${state.model ? ` · ${state.model}` : ''} · ${state.cwd}`)
+    this.persist(state)
+    this.emitAgent(state)
+    void this.watch(state, session)
+    this.flush(state)
+  }
+
+  private flush(state: OpenCodeState): void {
+    if (!state.session || state.ended || state.detaching) return
+    if (state.queue.length && !state.rateLimitPause)
+      this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=? AND status='idle'")
+        .run(state.agentId)
+    state.sending = state.sending.then(async () => {
+      while (state.session && state.queue.length && !state.ended && !state.detaching) {
+        await this.awaitIdle(state)
+        if (!state.session || state.ended || state.detaching || !state.queue.length) return
+        const text = state.queue.shift()!
+        await this.driver.send(state.session.id, text)
+        state.turnActive = true
+      }
+      this.persist(state)
+    }).catch((error) => {
+      this.log(state, 'error', error instanceof Error ? error.message : String(error))
+    })
+  }
+
+  private awaitIdle(state: OpenCodeState): Promise<void> {
+    if (!state.turnActive) return Promise.resolve()
+    return new Promise<void>((resolve) => { state.idleWaiters.push(resolve) })
+  }
+
+  private notifyIdle(state: OpenCodeState): void {
+    if (state.turnActive) {
+      state.turnActive = false
+      if (!state.rateLimitPause)
+        this.db.prepare("UPDATE agents SET status='idle', last_seen=datetime('now') WHERE id=? AND status='active'").run(state.agentId)
+    }
+    for (const waiter of state.idleWaiters.splice(0)) waiter()
+  }
+
+  private async watch(state: OpenCodeState, session: DriverSession): Promise<void> {
+    let sawExit = false
+    try {
+      for await (const event of this.driver.events(session.id)) {
+        if (state.ended || state.detaching || state.session?.id !== session.id) return
+        state.lastEventSeq = Math.max(state.lastEventSeq, event.seq)
+        this.applyEvent(state, event)
+        if (event.type === 'exit') { sawExit = true; break }
+        if (state.cardId !== null && this.isTurnCompleted(event)) {
+          const failed = event.metadata?.phase === 'turn_start_failed' || event.metadata?.phase === 'session_error'
+          this.finalizeCard(state, failed ? 'error' : 'success', event.data || (failed ? 'turn failed' : 'finished'))
+          state.stopping = true
+          await this.driver.stop(session.id).catch(() => undefined)
+          sawExit = true
+          break
+        }
+      }
+    } catch (error) {
+      this.log(state, 'error', error instanceof Error ? error.message : String(error))
+      sawExit = true
+    } finally {
+      if (state.detaching) {
+        this.persist(state)
+        return
+      }
+      if (sawExit && !state.ended) this.finish(
+        state,
+        state.cardFinalized ? 'success' : 'error',
+        state.stopping ? 'stopped' : 'OpenCode session ended',
+      )
+    }
+  }
+
+  private applyEvent(state: OpenCodeState, event: DriverEvent): void {
+    const metadata = event.metadata ?? {}
+    const phase = typeof metadata.phase === 'string' ? metadata.phase : null
+    const rateLimited = event.type === 'error'
+      && /rate.?limit|too many requests|quota|\b429\b/i.test(event.data)
+    if (rateLimited) {
+      state.rateLimitPause = { at: event.at }
+      this.db.prepare("UPDATE agents SET status='paused_provider', last_seen=datetime('now') WHERE id=?").run(state.agentId)
+    } else if (state.rateLimitPause && (event.type === 'output' || phase === 'turn_started')) {
+      state.rateLimitPause = null
+      this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?").run(state.agentId)
+    }
+    if (phase === 'turn_started') {
+      state.turnActive = true
+      if (!state.rateLimitPause)
+        this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=? AND status='idle'").run(state.agentId)
+    }
+    if (phase && ['turn_completed', 'turn_start_failed', 'session_error'].includes(phase)) {
+      this.notifyIdle(state)
+    }
+    const usage = metadata.usage && typeof metadata.usage === 'object'
+      ? metadata.usage as Record<string, unknown>
+      : null
+    if (usage && phase === 'message_updated') this.recordUsageDelta(state, usage)
+
+    if (appendDriverTranscript(state.transcript, event)) {
+      this.bus.emit('event', { board_id: state.boardId, type: 'transcript', data: { agent_id: state.agentId } })
+    }
+    this.persist(state)
+  }
+
+  // See `fromOpenCodeMessageUsage`: replace-then-diff against the last
+  // observed message's cumulative totals, same pattern as Qwen/Codex.
+  private recordUsageDelta(state: OpenCodeState, raw: Record<string, unknown>): void {
+    const total = fromOpenCodeMessageUsage(raw)
+    const previous = state.usageTotal
+    const previousCostCents = previous.cost_cents ?? 0
+    const totalCostCents = total.cost_cents ?? 0
+    const deltaCostCents = totalCostCents > previousCostCents ? totalCostCents - previousCostCents : null
+    const delta: ProviderUsageSplit = {
+      provider: OPENCODE_PROVIDER_ID,
+      total_tokens: Math.max(0, total.total_tokens - previous.total_tokens),
+      input_tokens: Math.max(0, total.input_tokens - previous.input_tokens),
+      cached_input_tokens: Math.max(0, total.cached_input_tokens - previous.cached_input_tokens),
+      cache_creation_input_tokens: Math.max(0, total.cache_creation_input_tokens - previous.cache_creation_input_tokens),
+      output_tokens: Math.max(0, total.output_tokens - previous.output_tokens),
+      reasoning_output_tokens: Math.max(0, total.reasoning_output_tokens - previous.reasoning_output_tokens),
+      cost_cents: deltaCostCents,
+    }
+    if (delta.total_tokens > 0 || delta.cost_cents !== null) recordProviderUsage(this.db, state.boardId, state.agentId, delta)
+    state.usageTotal = total
+  }
+
+  private isTurnCompleted(event: DriverEvent): boolean {
+    const phase = event.metadata?.phase
+    return phase === 'turn_completed' || phase === 'turn_start_failed' || phase === 'session_error'
+  }
+
+  private failStart(state: OpenCodeState, error: unknown): void {
+    if (state.ended || state.detaching) return
+    const detail = error instanceof Error ? error.message : String(error)
+    this.log(state, 'error', `OpenCode failed to start: ${detail}`)
+    this.finish(state, 'error', detail)
+  }
+
+  private finish(state: OpenCodeState, outcome: 'success' | 'error', reason: string): void {
+    if (state.ended) return
+    state.ended = true
+    this.notifyIdle(state)
+    if (state.cardId !== null && !state.cardFinalized) this.finalizeCard(state, outcome, reason)
+    removeAgentCards(this.db, state.agentId)
+    this.db.prepare("UPDATE agents SET status='gone', last_seen=datetime('now') WHERE id=?").run(state.agentId)
+    bounceDeadLetters(this.db, state.agentId)
+    this.log(state, 'status', reason)
+    this.persist(state)
+    this.emitAgent(state)
+  }
+
+  private finalizeCard(state: OpenCodeState, outcome: 'success' | 'error', reason: string): void {
+    if (state.cardId === null || state.cardFinalized) return
+    state.cardFinalized = true
+    const card = this.card(state.cardId)
+    if (!card) return
+    const column = card.column === 'done' ? 'done' : outcome === 'success' ? 'review' : 'blocked'
+    this.db.prepare(`UPDATE cards SET owner_agent_id=NULL, column_name=?, updated_at=datetime('now') WHERE id=?`)
+      .run(column, state.cardId)
+    this.cardEvent(state.cardId, state.agentId, 'agent_exit', {
+      outcome,
+      reason,
+      to: column,
+      agent: state.name,
+      provider: OPENCODE_PROVIDER_ID,
+    })
+    this.bus.emit('event', { board_id: state.boardId, type: 'card', data: this.card(state.cardId) })
+    this.bus.emit('event', {
+      board_id: state.boardId,
+      type: 'launch',
+      data: {
+        card_id: state.cardId,
+        agent_id: state.agentId,
+        agent_name: state.name,
+        provider: OPENCODE_PROVIDER_ID,
+        status: 'finished',
+        outcome,
+        reason,
+        to_column: column,
+        summary: this.finalAssistantOutput(state),
+      },
+    })
+  }
+
+  private finalAssistantOutput(state: OpenCodeState): string | undefined {
+    for (let index = state.transcript.length - 1; index >= 0; index -= 1) {
+      const line = state.transcript[index]
+      if (line.kind !== 'text') continue
+      const output = line.text.trim()
+      if (output) return output
+    }
+    return undefined
+  }
+
+  private persist(state: OpenCodeState): void {
+    const providerState = {
+      driver_session_id: state.session?.id ?? null,
+      provider_session_id: state.session?.externalId ?? null,
+      last_event_seq: state.lastEventSeq,
+      cwd: state.cwd,
+      card_id: state.cardId,
+      branch: state.branch,
+      lifecycle: state.ended ? 'stopped' : state.detaching ? 'detached' : state.session ? 'active' : 'starting',
+      usage_total: state.usageTotal,
+      rate_limit_pause: state.rateLimitPause,
+    }
+    this.db.prepare(`UPDATE agents SET provider_state_json=?, access_profile=?, model=?, effort=?, last_seen=datetime('now') WHERE id=?`)
+      .run(JSON.stringify(providerState), state.accessProfile, state.model, state.effort, state.agentId)
+  }
+
+  private log(state: OpenCodeState, kind: TranscriptLine['kind'], text: string, metadata?: Record<string, unknown>): void {
+    state.transcript.push({ at: new Date().toISOString(), kind, text, ...(metadata ? { metadata } : {}) })
+    if (state.transcript.length > 500) state.transcript.shift()
+    this.bus.emit('event', { board_id: state.boardId, type: 'transcript', data: { agent_id: state.agentId } })
+  }
+
+  private emitAgent(state: OpenCodeState): void {
+    this.bus.emit('event', { board_id: state.boardId, type: 'agent', data: this.agent(state.agentId) })
+  }
+
+  private cardEvent(cardId: number, agentId: number | null, type: string, payload: unknown): void {
+    this.db.prepare('INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)')
+      .run(cardId, agentId, type, JSON.stringify(payload))
+  }
+
+  private agent(agentId: number): any {
+    return this.db.prepare('SELECT * FROM agents WHERE id=?').get(agentId)
+  }
+
+  private card(cardId: number): any {
+    const card = this.db.prepare(`SELECT c.*, a.name AS owner FROM cards c
+      LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`).get(cardId) as any
+    return card && { ...card, column: card.column_name, paths: JSON.parse(card.paths) }
+  }
+
+  private ambientWorkspace(state: OpenCodeState) {
+    const existing = new WorkspaceStore(this.db).listBoard(state.boardId)
+      .find((workspace) => workspace.card_id === null
+        && workspace.status === 'active'
+        && (workspace.worktree_path ?? workspace.root_path) === state.cwd)
+    if (existing) return existing
+    return new WorkspaceStore(this.db).create({
+      boardId: state.boardId,
+      name: `Ambient ${state.name}`,
+      kind: 'shared',
+      rootPath: state.cwd,
+      status: 'active',
+    })
+  }
+
+  private ensureLegacyCollaborationSession(
+    state: OpenCodeState,
+    session: DriverSession,
+  ): { workspaceId: string; sessionId: string } {
+    const workspace = this.ambientWorkspace(state)
+    const profile = new AgentProfileService(this.db).create({
+      boardId: state.boardId,
+      name: `Managed OpenCode ${state.agentId}`,
+      defaultProvider: OPENCODE_PROVIDER_ID,
+      defaultModel: state.model,
+      defaultEffort: state.effort,
+      defaultAccessProfile: state.accessProfile,
+      actor: { type: 'system', id: 'opencode-managed-runtime' },
+      idempotencyKey: `opencode-managed-agent:${state.agentId}:profile`,
+      correlationId: `opencode-managed-agent:${state.agentId}`,
+    })
+    const conversation = this.db.prepare(`SELECT id FROM agent_conversations
+      WHERE board_id=? AND profile_id=? AND status='active' AND is_default=1`)
+      .get(state.boardId, profile.id) as { id: string }
+    const sessionId = `legacy-opencode:${state.agentId}`
+    this.db.prepare(`INSERT INTO agent_sessions (
+        id, workspace_id, agent_id, provider, external_id, model, status,
+        profile_id, conversation_id, context_json, mode, driver_id, access_profile,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, 'opencode', ?, ?, 'running', ?, ?, ?, 'managed', 'opencode', ?,
+        datetime('now'), datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        workspace_id=excluded.workspace_id, agent_id=excluded.agent_id,
+        external_id=excluded.external_id, model=excluded.model, status='running',
+        profile_id=excluded.profile_id, conversation_id=excluded.conversation_id,
+        context_json=excluded.context_json, access_profile=excluded.access_profile,
+        updated_at=datetime('now')
+      WHERE agent_sessions.job_id IS NULL`).run(
+      sessionId,
+      workspace.id,
+      state.agentId,
+      // NULL until bound — '' would collide with the partial UNIQUE(provider, external_id) index
+      session.externalId || null,
+      state.model,
+      profile.id,
+      conversation.id,
+      JSON.stringify({ classification: 'legacy_managed', provider_session_id: session.externalId }),
+      state.accessProfile,
+    )
+    return { workspaceId: workspace.id, sessionId }
+  }
+
+  // OpenCode's session id is known immediately at session.create()/session.get()
+  // time (unlike Qwen, which only reports it in the first stream event), so
+  // this fires straight from `start()` rather than waiting for a later event.
+  private ensureCredential(state: OpenCodeState): void {
+    const externalId = state.session?.externalId?.trim()
+    if (!externalId || state.ended || state.detaching) return
+    if (state.credentialSessionId === externalId) return
+    try {
+      provisionManagedAgentSessionCredential(this.db, {
+        agentId: state.agentId,
+        boardId: state.boardId,
+        agentName: state.name,
+        provider: OPENCODE_PROVIDER_ID,
+        externalSessionId: externalId,
+        cwd: state.cwd,
+      })
+      state.credentialSessionId = externalId
+    } catch (error) {
+      this.log(state, 'error', `session credential not provisioned: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private required(agentId: number): OpenCodeState {
+    const state = this.states.get(agentId)
+    if (!state || state.ended) throw new Error(`OpenCode agent is not live: ${agentId}`)
+    return state
+  }
+
+  private assertResumeOwnership(externalId: string, existingAgentId?: number): void {
+    const owner = this.db.prepare(`SELECT id, name FROM agents
+      WHERE provider=? AND external_session_id=? LIMIT 1`).get(OPENCODE_PROVIDER_ID, externalId) as
+      { id: number; name: string } | undefined
+    if (owner && owner.id !== existingAgentId)
+      throw new Error(`OpenCode session ${externalId} already belongs to agent ${owner.name}`)
+    const durable = this.db.prepare(`SELECT agent_id FROM agent_sessions
+      WHERE provider=? AND external_id=? AND status='running'
+      ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(OPENCODE_PROVIDER_ID, externalId) as
+      { agent_id: number | null } | undefined
+    if (durable)
+      throw new Error(`OpenCode session ${externalId} is already attached to an active Agent OS job`)
+  }
+}
+
 type QueuedLaunch = ProviderLaunchRequest & { provider: string }
 
 /** One server-facing conductor surface that routes every operation by persisted provider. */
@@ -1710,6 +2462,7 @@ export class ProviderAgentManager implements ConductorLike {
     private readonly codexService?: AgentProviderService & { isRuntimeAvailable?(): boolean },
     private readonly agentOs?: AgentOsAgentControl,
     private readonly qwen?: QwenManagedAgentRuntime,
+    private readonly opencode?: OpenCodeManagedAgentRuntime,
   ) {
     bus.on('event', (event: any) => {
       if (event?.type === 'launch' && event?.data?.status === 'finished') void this.drainQueue()
@@ -1724,6 +2477,7 @@ export class ProviderAgentManager implements ConductorLike {
         : this.codex?.isHired(agentId) ?? false
     }
     if (provider === QWEN_PROVIDER_ID) return this.qwen?.isHired(agentId) ?? false
+    if (provider === OPENCODE_PROVIDER_ID) return this.opencode?.isHired(agentId) ?? false
     return this.claude.isHired(agentId)
   }
 
@@ -1731,6 +2485,7 @@ export class ProviderAgentManager implements ConductorLike {
     const resolved = this.resolveHire(options)
     if (resolved.provider === CODEX_PROVIDER_ID) return this.requireCodex().hire(resolved)
     if (resolved.provider === QWEN_PROVIDER_ID) return this.requireQwen().hire(resolved)
+    if (resolved.provider === OPENCODE_PROVIDER_ID) return this.requireOpenCode().hire(resolved)
     if (resolved.provider !== 'claude') throw new ProviderUnavailableError(resolved.provider, 'no registered agent provider')
     const agent = this.claude.hire({
       ...resolved,
@@ -1763,6 +2518,7 @@ export class ProviderAgentManager implements ConductorLike {
       || this.claude.isLaunched(cardId)
       || (this.codex?.isLaunched(cardId) ?? false)
       || (this.qwen?.isLaunched(cardId) ?? false)
+      || (this.opencode?.isLaunched(cardId) ?? false)
       || (this.agentOs?.isLaunchedCard(cardId) ?? false)
   }
 
@@ -1774,6 +2530,7 @@ export class ProviderAgentManager implements ConductorLike {
         : this.codex?.deliver(agentId, message) ?? false
     }
     if (provider === QWEN_PROVIDER_ID) return this.qwen?.deliver(agentId, message) ?? false
+    if (provider === OPENCODE_PROVIDER_ID) return this.opencode?.deliver(agentId, message) ?? false
     return this.claude.deliver(agentId, message)
   }
 
@@ -1785,6 +2542,7 @@ export class ProviderAgentManager implements ConductorLike {
         : this.codex?.task(agentId, text) ?? false
     }
     if (provider === QWEN_PROVIDER_ID) return this.qwen?.task(agentId, text) ?? false
+    if (provider === OPENCODE_PROVIDER_ID) return this.opencode?.task(agentId, text) ?? false
     return this.claude.task(agentId, text)
   }
 
@@ -1796,6 +2554,9 @@ export class ProviderAgentManager implements ConductorLike {
     }
     if (provider === QWEN_PROVIDER_ID) {
       return this.qwen?.transcript(agentId) ?? { lines: [], working: null }
+    }
+    if (provider === OPENCODE_PROVIDER_ID) {
+      return this.opencode?.transcript(agentId) ?? { lines: [], working: null }
     }
     const transcript = this.claude.transcript(agentId)
     const row = this.agentRow(agentId)
@@ -1820,6 +2581,7 @@ export class ProviderAgentManager implements ConductorLike {
         : this.codex?.subagents(agentId) ?? []
     }
     if (provider === QWEN_PROVIDER_ID) return this.qwen?.subagents() ?? []
+    if (provider === OPENCODE_PROVIDER_ID) return this.opencode?.subagents() ?? []
     return this.claude.subagents(agentId)
   }
 
@@ -1833,6 +2595,9 @@ export class ProviderAgentManager implements ConductorLike {
     if (provider === QWEN_PROVIDER_ID) {
       return this.qwen?.interruptAgent(agentId) ?? Promise.resolve(false)
     }
+    if (provider === OPENCODE_PROVIDER_ID) {
+      return this.opencode?.interruptAgent(agentId) ?? Promise.resolve(false)
+    }
     return this.claude.interruptAgent(agentId)
   }
 
@@ -1845,6 +2610,9 @@ export class ProviderAgentManager implements ConductorLike {
     }
     if (provider === QWEN_PROVIDER_ID) {
       return this.qwen?.fire(agentId) ?? Promise.resolve(false)
+    }
+    if (provider === OPENCODE_PROVIDER_ID) {
+      return this.opencode?.fire(agentId) ?? Promise.resolve(false)
     }
     return this.claude.fire(agentId)
   }
@@ -1869,6 +2637,9 @@ export class ProviderAgentManager implements ConductorLike {
     if (provider === QWEN_PROVIDER_ID) {
       return this.qwen?.setAccessProfile(agentId, profile) ?? false
     }
+    if (provider === OPENCODE_PROVIDER_ID) {
+      return this.opencode?.setAccessProfile(agentId, profile) ?? false
+    }
     const ok = (await this.claude.setPermissionMode?.(agentId, permissionModeForAccess(profile))) ?? false
     if (ok) this.db.prepare('UPDATE agents SET access_profile=? WHERE id=?').run(profile, agentId)
     return ok
@@ -1881,6 +2652,7 @@ export class ProviderAgentManager implements ConductorLike {
       return this.codex?.resolvePermission(agentId, requestId, behavior, message) ?? false
     }
     if (provider === QWEN_PROVIDER_ID) return false
+    if (provider === OPENCODE_PROVIDER_ID) return false
     return this.claude.resolvePermission?.(agentId, requestId, behavior, message, answers) ?? false
   }
 
@@ -1897,6 +2669,7 @@ export class ProviderAgentManager implements ConductorLike {
         ? this.agentOs!.resolveManagedApproval(agentId, requestId, decision, message, answers)
         : this.codex?.resolveApproval(agentId, requestId, decision, message, answers) ?? false
     if (provider === QWEN_PROVIDER_ID) return false
+    if (provider === OPENCODE_PROVIDER_ID) return false
     if (decision !== 'allow' && decision !== 'deny') return false
     return this.claude.resolvePermission?.(agentId, requestId, decision, message, answers) ?? false
   }
@@ -1910,6 +2683,9 @@ export class ProviderAgentManager implements ConductorLike {
     }
     if (provider === QWEN_PROVIDER_ID) {
       return this.qwen?.setModel(agentId, model) ?? Promise.resolve(false)
+    }
+    if (provider === OPENCODE_PROVIDER_ID) {
+      return this.opencode?.setModel(agentId, model) ?? Promise.resolve(false)
     }
     return this.claude.setModel?.(agentId, model) ?? Promise.resolve(false)
   }
@@ -1928,6 +2704,9 @@ export class ProviderAgentManager implements ConductorLike {
     if (provider === QWEN_PROVIDER_ID) {
       return this.qwen?.setEffort(agentId, level) ?? Promise.resolve('not-found')
     }
+    if (provider === OPENCODE_PROVIDER_ID) {
+      return this.opencode?.setEffort(agentId, level) ?? Promise.resolve('not-found')
+    }
     return this.claude.setEffort?.(agentId, level) ?? Promise.resolve('not-found')
   }
 
@@ -1935,6 +2714,7 @@ export class ProviderAgentManager implements ConductorLike {
     const provider = this.providerForAgent(agentId)
     if (provider === CODEX_PROVIDER_ID) return enabledCapabilities(CODEX_CAPABILITIES)
     if (provider === QWEN_PROVIDER_ID) return enabledCapabilities(QWEN_CAPABILITIES)
+    if (provider === OPENCODE_PROVIDER_ID) return enabledCapabilities(OPENCODE_CAPABILITIES)
     return enabledCapabilities(CLAUDE_CAPABILITIES)
   }
 
@@ -1990,6 +2770,7 @@ export class ProviderAgentManager implements ConductorLike {
       ...claude.map((catalog) => ({ ...catalog, capabilities: catalog.capabilities ?? CLAUDE_CAPABILITIES })),
       codex,
       this.qwenCatalog(),
+      this.opencodeCatalog(),
     ]
   }
 
@@ -2016,10 +2797,30 @@ export class ProviderAgentManager implements ConductorLike {
     })
   }
 
+  // Unlike Qwen, OpenCode has no hardcoded fallback model list — it brokers
+  // whichever upstream providers the user configured, so a static array would
+  // go stale immediately. Falls back to an empty catalog until the live
+  // provider adapter's model discovery populates the cache.
+  private opencodeCatalog(): AgentProviderCatalog {
+    const available = !!this.opencode
+    const cached = readProviderModelCache(this.db, OPENCODE_PROVIDER_ID)
+    return openCodeProviderCatalog({
+      available,
+      models: cached?.models ?? [],
+      source: cached ? 'cache' : 'live',
+      updatedAt: cached?.updated_at ?? null,
+      capabilities: OPENCODE_CAPABILITIES,
+      detail: available
+        ? 'OpenCode runs non-interactive turns against whichever upstream provider is configured via `opencode auth login`.'
+        : 'Install and authenticate the OpenCode CLI to enable this provider.',
+    })
+  }
+
   adoptLaunch(agentId: number): void {
     const provider = this.providerForAgent(agentId)
     if (provider === CODEX_PROVIDER_ID) this.codex?.adoptLaunch(agentId)
     else if (provider === QWEN_PROVIDER_ID) this.qwen?.adoptLaunch(agentId)
+    else if (provider === OPENCODE_PROVIDER_ID) this.opencode?.adoptLaunch(agentId)
     else (this.claude as ConductorLike & { adoptLaunch?(id: number): void }).adoptLaunch?.(agentId)
   }
 
@@ -2027,6 +2828,7 @@ export class ProviderAgentManager implements ConductorLike {
     const provider = this.providerForAgent(agentId)
     if (provider === CODEX_PROVIDER_ID) return // Codex jobs reattach via the job executor
     if (provider === QWEN_PROVIDER_ID) return // Qwen sessions resume via the hire modal
+    if (provider === OPENCODE_PROVIDER_ID) return // OpenCode sessions resume via the hire modal
     ;(this.claude as ConductorLike & { resumeInterrupted?(id: number): void }).resumeInterrupted?.(agentId)
   }
 
@@ -2038,6 +2840,7 @@ export class ProviderAgentManager implements ConductorLike {
         : (this.claude as ConductorLike & { shutdown?(): Promise<void> }).shutdown?.() ?? Promise.resolve(),
       this.codex?.shutdown() ?? Promise.resolve(),
       this.qwen?.shutdown() ?? Promise.resolve(),
+      this.opencode?.shutdown() ?? Promise.resolve(),
     ])
   }
 
@@ -2079,6 +2882,7 @@ export class ProviderAgentManager implements ConductorLike {
   private startLaunch(request: QueuedLaunch): any {
     if (request.provider === CODEX_PROVIDER_ID) return this.requireCodex().launch(request)
     if (request.provider === QWEN_PROVIDER_ID) return this.requireQwen().launch(request)
+    if (request.provider === OPENCODE_PROVIDER_ID) return this.requireOpenCode().launch(request)
     if (request.provider !== 'claude') throw new ProviderUnavailableError(request.provider, 'no registered agent provider')
     return this.claude.launch({
       ...request,
@@ -2121,6 +2925,7 @@ export class ProviderAgentManager implements ConductorLike {
     if (provider === 'claude') return
     if (provider === CODEX_PROVIDER_ID && this.codex && this.codexService?.isRuntimeAvailable?.() !== false) return
     if (provider === QWEN_PROVIDER_ID && this.qwen) return
+    if (provider === OPENCODE_PROVIDER_ID && this.opencode) return
     throw new ProviderUnavailableError(provider, 'no registered agent provider')
   }
 
@@ -2135,6 +2940,12 @@ export class ProviderAgentManager implements ConductorLike {
     if (!this.qwen)
       throw new ProviderUnavailableError(QWEN_PROVIDER_ID, 'Qwen Code CLI is not ready')
     return this.qwen
+  }
+
+  private requireOpenCode(): OpenCodeManagedAgentRuntime {
+    if (!this.opencode)
+      throw new ProviderUnavailableError(OPENCODE_PROVIDER_ID, 'OpenCode server is not ready')
+    return this.opencode
   }
 
   private providerForAgent(agentId: number): string {

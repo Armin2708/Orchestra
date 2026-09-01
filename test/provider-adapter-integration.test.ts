@@ -592,7 +592,7 @@ describe('TOOL-014 capability-aware adapter integration', () => {
   it('makes the canonical support gate part of the Agent OS runtime composition', async () => {
     const runtime = createAgentOsRuntime(openDb(':memory:'))
     expect(runtime.providerAdapters.declarations().map((entry) => entry.provider_id))
-      .toEqual(['claude', 'codex', 'kimi', 'qwen'])
+      .toEqual(['claude', 'codex', 'kimi', 'opencode', 'qwen'])
     await runtime.shutdown()
   })
 

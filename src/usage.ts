@@ -94,7 +94,10 @@ export function recordProviderUsage(
   // Claude reports cache reads as a separate additive bucket. Codex and Qwen
   // report cached input as a subset of input_tokens, so mirroring it into the
   // legacy additive cache_read column would inflate usageTotal()/boardUsage() rollups.
-  const legacyCacheRead = usage.provider === 'codex' || usage.provider === 'qwen'
+  // OpenCode is treated the same way: it's a CLI/server wrapper like Codex/Qwen
+  // rather than the raw Claude SDK path, and its cache_read_tokens field isn't
+  // documented as additive, so the conservative (non-inflating) assumption wins.
+  const legacyCacheRead = usage.provider === 'codex' || usage.provider === 'qwen' || usage.provider === 'opencode'
     ? 0
     : usage.cached_input_tokens
   runBoundCompatibilityMigrationOperation(

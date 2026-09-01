@@ -258,7 +258,7 @@ carrying a canonical request through accepted evidence into exact cited reuse by
 - provider contract version 1 defines executable/version provenance, safe provider-owned
   environment rules, readiness, runtime/billing/credential modes, explicit cost/overage consent,
   models, capabilities, approvals, lifecycle controls, normalized events, usage, and explicit
-  unsupported states for the four first-release manifests;
+  unsupported states for the five first-release manifests;
 - the gateway assigns each managed session ID before launch/fork, seals authorization evidence,
   rejects cross-domain identity reuse, translates controls/events through the assigned identity,
   and compensates malformed launch/fork output without exposing raw caught errors;

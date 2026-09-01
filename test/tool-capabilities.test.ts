@@ -61,9 +61,9 @@ const fixture = () => {
 }
 
 describe('provider-neutral tool capabilities', () => {
-  it('keeps the four-provider matrix exact, complete, and fail-closed without real acceptance', () => {
+  it('keeps the five-provider matrix exact, complete, and fail-closed without real acceptance', () => {
     const matrix = buildDeclaredProviderCapabilityMatrix()
-    expect(matrix.map((row) => row.provider_id)).toEqual(['claude', 'codex', 'qwen', 'kimi'])
+    expect(matrix.map((row) => row.provider_id)).toEqual(['claude', 'codex', 'qwen', 'kimi', 'opencode'])
     expect(matrix.every((row) => row.capabilities.length === 24)).toBe(true)
     expect(matrix.find((row) => row.provider_id === 'claude')).toMatchObject({
       release_state: 'unsupported',
@@ -86,6 +86,12 @@ describe('provider-neutral tool capabilities', () => {
         }),
         expect.objectContaining({ provider_id: 'kimi', managed_support: 'unsupported' }),
       ]))
+    expect(matrix.find((row) => row.provider_id === 'opencode')).toMatchObject({
+      release_state: 'candidate',
+      managed_support: 'candidate',
+      accepted_evidence: false,
+      automation_policy: 'unknown',
+    })
     expect(matrix.every((row) => row.blockers.includes('acceptance_evidence_missing'))).toBe(true)
   })
 

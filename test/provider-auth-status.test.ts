@@ -73,7 +73,19 @@ describe('provider auth status', () => {
     expect(providerLoginCommand('claude')).toBe('claude /login')
     expect(providerLoginCommand('codex')).toBe('codex login')
     expect(providerLoginCommand('qwen')).toBe('qwen')
+    expect(providerLoginCommand('opencode')).toBe('opencode auth login')
     expect(providerLoginCommand('nope')).toBeNull()
+  })
+
+  // OpenCode's readiness depends on whichever upstream provider(s) the user
+  // configured, not a single vendor credential — this pass reports 'unknown'
+  // honestly rather than parsing unverified CLI output, matching the provider
+  // adapter's own readiness probe (`auth_status: 'unknown'`).
+  it('reports OpenCode auth as unknown rather than guessing from unverified CLI output', () => {
+    const state = readProviderAuthStatus('opencode', '/bin/opencode', withOutput('opencode 1.18.25'))
+    expect(state.status).toBe('unknown')
+    expect(state.account).toBeNull()
+    expect(state.login_command).toBe('opencode auth login')
   })
 
   it('reads Qwen auth from the CLI-selected provider profile without touching keys', () => {

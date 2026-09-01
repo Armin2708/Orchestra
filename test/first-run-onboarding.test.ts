@@ -154,6 +154,14 @@ describe('first-run onboarding domain', () => {
     expect(() => applyFirstRunAmbientHooks(qwen, { installProviderHooks }))
       .toThrow('available only for Claude Code and Codex CLI')
 
+    const opencode = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'opencode',
+      hook_scope: 'project',
+    })
+    expect(() => applyFirstRunAmbientHooks(opencode, { installProviderHooks }))
+      .toThrow('available only for Claude Code and Codex CLI')
+
     const providerApi = buildFirstRunPlan({
       project_root: root,
       provider_id: 'claude',
@@ -177,11 +185,11 @@ describe('first-run onboarding domain', () => {
     expect(installProviderHooks).not.toHaveBeenCalled()
   })
 
-  it('rejects forged cleared blockers for Codex and Qwen before any write', () => {
+  it('rejects forged cleared blockers for Codex, Qwen, and OpenCode before any write', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-forged-'))
     const configPath = path.join(root, 'state', 'onboarding.json')
     const installProviderHooks = vi.fn()
-    for (const provider_id of ['codex', 'qwen'] as const) {
+    for (const provider_id of ['codex', 'qwen', 'opencode'] as const) {
       const candidate = buildFirstRunPlan({
         project_root: root,
         provider_id,

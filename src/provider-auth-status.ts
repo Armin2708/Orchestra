@@ -81,11 +81,19 @@ const parseQwen = (_output: string): Pick<ProviderAuthStatus, 'status' | 'accoun
   return { status: 'authenticated', account: null, method: `qwen_settings:${selectedType}` }
 }
 
+// OpenCode manages its own auth via `opencode auth login`, but this pass does
+// not parse its output into a status: the provider adapter's own readiness
+// probe (`probeOpenCodeProviderReadinessV1`) deliberately reports
+// `auth_status: 'unknown'` rather than 'ready', since OpenCode's readiness
+// depends on whichever upstream provider(s) the user configured — not a
+// single vendor credential like Qwen/Codex. Reporting `unknown` here matches
+// that same honest stance instead of inventing an unverified CLI output parse.
 const PROBES: Readonly<Record<string, AuthProbe>> = {
   claude: { args: ['auth', 'status', '--json'], login: 'claude /login', parse: parseClaude },
   codex: { args: ['login', 'status'], login: 'codex login', parse: parseCodex },
   qwen: { args: ['--version'], login: 'qwen', parse: parseQwen },
   kimi: { args: ['--version'], login: 'kimi', parse: () => ({ status: 'unknown', account: null, method: null }) },
+  opencode: { args: ['--version'], login: 'opencode auth login', parse: () => ({ status: 'unknown', account: null, method: null }) },
 }
 
 export const providerLoginCommand = (providerId: string): string | null =>

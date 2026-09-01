@@ -91,16 +91,17 @@ is still pending, Codex remains candidate/unsupported, and no production support
 
 ## First-release provider candidates not yet supported
 
-All four providers are in the product target, but none has passed the complete exact
+All five providers are in the product target, but none has passed the complete exact
 provider/adapter/mode/billing/credential/version/platform/source/eight-gate acceptance contract.
-Claude, Codex, Qwen and Kimi therefore remain **Unsupported** for managed beta launch. Installed
-CLIs remain usable as ordinary terminal programs; installation or a version probe is not release
-acceptance.
+Claude, Codex, Qwen, Kimi and OpenCode therefore remain **Unsupported** for managed beta launch.
+Installed CLIs remain usable as ordinary terminal programs; installation or a version probe is not
+release acceptance.
 
 | Provider target | Verified upstream account path | Current Orchestra status |
 |---|---|---|
 | Qwen Code | Alibaba Cloud Coding Plan is a fixed-fee personal subscription configured through Qwen Code's `/auth`; it uses a subscription-scoped key. Retired Qwen OAuth and usage-priced provider API keys are not equivalent subscription paths. | Manual interactive use is possible inside the raw terminal when independently installed and authenticated. Current Coding Plan terms restrict non-interactive/backend use, so autonomous personal-plan orchestration is blocked pending provider confirmation. No managed compatibility claim. |
 | Kimi Code | Kimi membership can authorize the native CLI through the `/login` OAuth device flow. Kimi Open Platform API-key billing is a distinct optional path. | Manual use is possible inside the raw terminal when independently installed and authenticated. A future adapter must also surface optional metered Extra Usage instead of representing OAuth alone as proof of zero overage. No managed compatibility claim. |
+| OpenCode | OpenCode is bring-your-own-provider: it brokers whichever upstream model provider(s) the user has configured through `opencode auth`/its own config, which may themselves be subscription- or usage-priced. Orchestra cannot classify that from the outside, so no single verified account path is claimed. | A working driver/adapter exists (`opencode serve` + `@opencode-ai/sdk`, structured events, real per-turn usage), registered `candidate`. Whether OpenCode's own upstream-provider terms permit autonomous/non-interactive use is unresolved; `automation_policy` is declared `unknown`, which fail-closes managed/background launch until confirmed. No managed compatibility claim. |
 
 Candidate versions will be frozen only after install, login, native-CLI lifecycle, approval,
 structured-event, usage, resume, cancellation, and PTY gates pass on every claimed operating

@@ -121,7 +121,7 @@ describe('BASE-010 declared-provider compatibility contract', () => {
     expect(ENVIRONMENT_DECLARED_PROVIDER_COMPATIBILITY_CONTRACT)
       .toBe(DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1)
     expect(ENVIRONMENT_DECLARED_PROVIDER_COMPATIBILITY_CONTRACT.providers)
-      .toHaveLength(4)
+      .toHaveLength(5)
   })
   it('declares every first-release provider with exact executable, auth, billing, overage, and evidence truth', () => {
     expect(DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1).toMatchObject({
@@ -132,7 +132,7 @@ describe('BASE-010 declared-provider compatibility contract', () => {
     })
     expect(DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1.providers
       .map((provider) => provider.provider_id))
-      .toEqual(['claude', 'codex', 'qwen', 'kimi'])
+      .toEqual(['claude', 'codex', 'qwen', 'kimi', 'opencode'])
 
     for (const provider of DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1.providers) {
       expect(provider.native_subscription).toMatchObject({
@@ -203,6 +203,25 @@ describe('BASE-010 declared-provider compatibility contract', () => {
         overage_behavior: 'optional_metered',
         explicit_overage_consent_required: true,
         safe_readiness_probe: null,
+      },
+    })
+    expect(byId.opencode).toMatchObject({
+      release_state: 'candidate',
+      executable: {
+        source: 'path',
+        command_override_env: 'ORCHESTRA_OPENCODE_COMMAND',
+        exact_versions: ['1.18.25'],
+        exact_platforms: ['darwin-arm64'],
+      },
+      native_subscription: {
+        credential_kind: 'provider_account_session',
+        authentication_mechanism: 'opencode_auth_login',
+        // Unlike Qwen/Codex, whether OpenCode's own upstream-provider terms
+        // permit autonomous use is unresolved (see design spec, "Out of
+        // scope") — automation_policy and overage stay 'unknown', not 'allowed'.
+        automation_policy: 'unknown',
+        overage_behavior: 'unknown',
+        safe_readiness_probe: ['--version'],
       },
     })
   })
@@ -344,5 +363,20 @@ describe('BASE-010 declared-provider compatibility contract', () => {
     const kimi = assessDeclaredProviderCompatibilityV1(kimiEvidence)
     expect(kimi.ready).toBe(false)
     expect(kimi.blockers).toContain('overage_not_verified')
+  })
+
+  it('fails closed on OpenCode automation policy instead of assuming subscription-first authorization', () => {
+    // Unlike Qwen (owner-authorized `allowed`), OpenCode's automation_policy is
+    // deliberately `unknown` because whether its upstream-provider terms permit
+    // autonomous use was never resolved — this must block, not silently pass.
+    const opencode = assessDeclaredProviderCompatibilityV1(evidence('opencode'))
+    expect(opencode.ready).toBe(false)
+    expect(opencode.blockers).toEqual(expect.arrayContaining([
+      'automation_not_allowed',
+      'manifest_not_validated',
+      'mode_not_supported',
+    ]))
+    expect(opencode.blockers).not.toContain('executable_version_not_validated')
+    expect(opencode.blockers).not.toContain('platform_not_validated')
   })
 })

@@ -64,6 +64,7 @@ import {
 } from '../provider-auth-status.js'
 import { discoverClaudeProviderExecutableV1 } from '../runtime/drivers/claude-provider-adapter.js'
 import { discoverQwenProviderExecutableV1 } from '../runtime/drivers/qwen-provider-adapter.js'
+import { discoverOpenCodeProviderExecutableV1 } from '../runtime/drivers/opencode-provider-adapter.js'
 import { discoverKimiProviderExecutableV1 } from '../runtime/drivers/kimi-provider-adapter.js'
 import { agentHomePlugin } from './agent-home-routes.js'
 import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
@@ -394,6 +395,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
         : discoverClaudeProviderExecutableV1().version
     } catch { /* unknown */ }
     try { installedVersions.qwen = discoverQwenProviderExecutableV1().version } catch { /* unknown */ }
+    try { installedVersions.opencode = discoverOpenCodeProviderExecutableV1().version } catch { /* unknown */ }
     try { installedVersions.kimi = discoverKimiProviderExecutableV1().version } catch { /* unknown */ }
 
     const descriptors = await asyncDescriptors(options.providers, [])
@@ -422,6 +424,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       claude: resolvePreferredClaudeExecutableV1() ?? resolveExecutableOnPath('claude'),
       codex: resolveExecutableOnPath('codex'),
       qwen: resolveExecutableOnPath('qwen'),
+      opencode: resolveExecutableOnPath('opencode'),
       kimi: resolveExecutableOnPath('kimi'),
     }
 

@@ -20,7 +20,7 @@ import type {
   ProviderRuntimeMode,
 } from './provider-contract.js'
 
-const PROVIDER_IDS = ['claude', 'codex', 'qwen', 'kimi'] as const
+const PROVIDER_IDS = ['claude', 'codex', 'qwen', 'kimi', 'opencode'] as const
 const IDENTIFIER = /^[a-z0-9][a-z0-9_.-]{0,127}$/
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/
 const PLATFORM = /^[a-z0-9][a-z0-9_.-]{0,127}$/

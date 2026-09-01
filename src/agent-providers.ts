@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 export const CLAUDE_PROVIDER_ID = 'claude'
 export const CODEX_PROVIDER_ID = 'codex'
 export const QWEN_PROVIDER_ID = 'qwen'
+export const OPENCODE_PROVIDER_ID = 'opencode'
 
 export type AgentProviderCapability =
   | 'steering'
@@ -264,4 +265,18 @@ export function qwenProviderCatalog(input: {
   usage?: AgentProviderUsageSnapshot
 }): AgentProviderCatalog {
   return agentProviderCatalog({ id: QWEN_PROVIDER_ID, name: 'Qwen Code', ...input })
+}
+
+export function openCodeProviderCatalog(input: {
+  available: boolean
+  models?: AgentProviderModel[]
+  source?: AgentProviderCatalog['source']
+  updatedAt?: string | null
+  detail?: string
+  capabilities?: AgentProviderCapabilities
+  health?: AgentProviderHealth
+  auth?: AgentProviderAuthState
+  usage?: AgentProviderUsageSnapshot
+}): AgentProviderCatalog {
+  return agentProviderCatalog({ id: OPENCODE_PROVIDER_ID, name: 'OpenCode', ...input })
 }

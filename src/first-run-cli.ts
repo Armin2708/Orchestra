@@ -99,7 +99,7 @@ export const collectFirstRunAnswers = async (
   const provider = partial.provider_id
     ?? oneOf<FirstRunProviderId>(
       await ask('Provider', 'codex'),
-      ['claude', 'codex', 'qwen', 'kimi'],
+      ['claude', 'codex', 'qwen', 'opencode', 'kimi'],
       'provider',
     )
   const executionMode = partial.execution_mode
@@ -146,7 +146,7 @@ export const registerFirstRunCommands = (
   program.command('onboard')
     .description('configure a safe local-first project and inspect provider readiness')
     .option('--project <path>')
-    .option('--provider <provider>', 'claude|codex|qwen|kimi')
+    .option('--provider <provider>', 'claude|codex|qwen|opencode|kimi')
     .option('--mode <mode>', 'native_subscription|provider_api')
     .option('--hooks <scope>', 'off|project|global')
     .option('--telemetry <choice>', 'off|redacted')
@@ -171,7 +171,7 @@ export const registerFirstRunCommands = (
       const partial: Partial<FirstRunAnswers> = {
         project_root: options.project ? path.resolve(cwd(), options.project) : undefined,
         provider_id: options.provider
-          ? oneOf<FirstRunProviderId>(options.provider, ['claude', 'codex', 'qwen', 'kimi'], 'provider')
+          ? oneOf<FirstRunProviderId>(options.provider, ['claude', 'codex', 'qwen', 'opencode', 'kimi'], 'provider')
           : undefined,
         execution_mode: options.mode
           ? oneOf<FirstRunExecutionMode>(options.mode, ['native_subscription', 'provider_api'], 'execution mode')

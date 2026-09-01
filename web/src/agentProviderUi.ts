@@ -62,6 +62,7 @@ export function providerLabel(provider?: string | null): string {
   if (id === 'claude') return 'Claude'
   if (id === 'codex') return 'Codex'
   if (id === 'qwen') return 'Qwen Code'
+  if (id === 'opencode') return 'OpenCode'
   return id.split(/[-_]/).filter(Boolean).map((part) => part[0]?.toUpperCase() + part.slice(1)).join(' ')
 }
 

@@ -372,6 +372,47 @@
             "real_acceptance_matrix_missing"
           ]
         }
+      },
+      {
+        "provider_id": "opencode",
+        "adapter_id": "opencode-server-sdk",
+        "release_state": "candidate",
+        "executable": {
+          "command": "opencode",
+          "source": "path",
+          "command_override_env": "ORCHESTRA_OPENCODE_COMMAND",
+          "exact_versions": ["1.18.25"],
+          "exact_platforms": ["darwin-arm64"]
+        },
+        "native_subscription": {
+          "mode_id": "native_subscription",
+          "runtime_mode": "native_cli",
+          "billing_mode": "personal_subscription",
+          "credential_kind": "provider_account_session",
+          "authentication_mechanism": "opencode_auth_login",
+          "safe_readiness_probe": ["--version"],
+          "automation_policy": "unknown",
+          "overage_behavior": "unknown",
+          "explicit_overage_consent_required": true
+        },
+        "provider_api": {
+          "mode_id": "native_api_key",
+          "runtime_mode": "native_cli",
+          "billing_mode": "usage_priced_api",
+          "credential_kind": "usage_priced_api_key",
+          "explicit_opt_in_required": true,
+          "automatic_fallback_allowed": false
+        },
+        "acceptance": {
+          "real_matrix_state": "missing",
+          "support_claim": "blocked",
+          "blocker_codes": [
+            "automation_policy_not_confirmed",
+            "provider_managed_overage_state_missing",
+            "managed_adapter_acceptance_missing",
+            "real_acceptance_matrix_missing"
+          ]
+        }
       }
     ]
   }

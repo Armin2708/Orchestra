@@ -41,6 +41,7 @@ import {
   CODEX_PROVIDER_MANIFEST_V1,
   FIRST_RELEASE_PROVIDER_MANIFESTS_V1,
   KIMI_PROVIDER_MANIFEST_V1,
+  OPENCODE_PROVIDER_MANIFEST_V1,
   QWEN_PROVIDER_MANIFEST_V1,
 } from '../src/provider-manifests.js'
 
@@ -367,13 +368,14 @@ const expectSafeAdapterFailure = async (
 }
 
 describe('terminal-agent provider contract V1', () => {
-  it('declares the four first-release targets without claiming unsupported providers', () => {
+  it('declares the five first-release targets without claiming unsupported providers', () => {
     expect(FIRST_RELEASE_PROVIDER_MANIFESTS_V1.map((manifest) => manifest.provider_id))
-      .toEqual(['claude', 'codex', 'qwen', 'kimi'])
+      .toEqual(['claude', 'codex', 'qwen', 'kimi', 'opencode'])
     expect(CLAUDE_PROVIDER_MANIFEST_V1.release_state).toBe('unsupported')
     expect(CODEX_PROVIDER_MANIFEST_V1.release_state).toBe('candidate')
     expect(QWEN_PROVIDER_MANIFEST_V1.release_state).toBe('candidate')
     expect(KIMI_PROVIDER_MANIFEST_V1.release_state).toBe('unsupported')
+    expect(OPENCODE_PROVIDER_MANIFEST_V1.release_state).toBe('candidate')
     expect(CLAUDE_PROVIDER_MANIFEST_V1.modes[0]?.support).toEqual({
       state: 'policy_blocked',
       reason_code: 'third_party_subscription_routing_prohibited',

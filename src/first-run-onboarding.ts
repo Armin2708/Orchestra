@@ -15,7 +15,7 @@ import {
 import { FIRST_RELEASE_PROVIDER_MANIFESTS_V1 } from './provider-manifests.js'
 
 export const FIRST_RUN_CONFIG_SCHEMA_VERSION = 1 as const
-export const FIRST_RUN_PROVIDER_IDS = ['claude', 'codex', 'qwen', 'kimi'] as const
+export const FIRST_RUN_PROVIDER_IDS = ['claude', 'codex', 'qwen', 'opencode', 'kimi'] as const
 
 export type FirstRunProviderId = typeof FIRST_RUN_PROVIDER_IDS[number]
 export type FirstRunExecutionMode = 'native_subscription' | 'provider_api'

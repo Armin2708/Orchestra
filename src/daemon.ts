@@ -33,7 +33,7 @@ import {
 import { AgentHomeCodexNativeEventSink } from './agent-os/codex-native-events.js'
 import { CodexAgentHomeThreadBinder } from './agent-os/codex-session-binding.js'
 import { AgentHomeClaudeNativeEventSink } from './agent-os/claude-native-events.js'
-import { CODEX_PROVIDER_ID, QWEN_PROVIDER_ID, writeProviderModelCache } from './agent-providers.js'
+import { CODEX_PROVIDER_ID, OPENCODE_PROVIDER_ID, QWEN_PROVIDER_ID, writeProviderModelCache } from './agent-providers.js'
 import {
   assertManagedEnvironmentCompatibility,
   runEnvironmentDoctor,
@@ -61,6 +61,11 @@ import {
   QWEN_PROVIDER_MODEL_CATALOG_V1,
 } from './runtime/drivers/qwen-provider-adapter.js'
 import { QwenAgentDriver } from './runtime/drivers/qwen.js'
+import {
+  createOpenCodeProviderAdapterV1,
+  discoverOpenCodeProviderExecutableV1,
+} from './runtime/drivers/opencode-provider-adapter.js'
+import { OpenCodeAgentDriver } from './runtime/drivers/opencode.js'
 import { discoverKimiProviderExecutableV1 } from './runtime/drivers/kimi-provider-adapter.js'
 import {
   ProviderContractAgentDriverV1,
@@ -70,6 +75,7 @@ import {
 } from './runtime/drivers/provider-launch-request-broker.js'
 import {
   CodexManagedAgentRuntime,
+  OpenCodeManagedAgentRuntime,
   ProviderAgentManager,
   ProviderUnavailableError,
   QwenManagedAgentRuntime,
@@ -100,7 +106,7 @@ export type DaemonProviderToolSurface = ReturnType<
 >
 
 export type DaemonProviderDiscoveries = Readonly<Record<
-  'claude' | 'codex' | 'qwen' | 'kimi',
+  'claude' | 'codex' | 'qwen' | 'opencode' | 'kimi',
   ProviderExecutableDiscoveryV1
 >>
 
@@ -608,6 +614,36 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       isDefault: model.isDefault,
     })), QWEN_PROVIDER_ID)
   }
+  const opencodeCommand = process.env.ORCHESTRA_OPENCODE_COMMAND?.trim() || 'opencode'
+  // Unlike Qwen/Codex's single-vendor credentials, OpenCode brokers whichever
+  // upstream providers the user has configured for it (OPENAI_API_KEY,
+  // ANTHROPIC_API_KEY, etc. are all legitimate inputs), so it does not get an
+  // allowlisted environment the way sanitizedQwenEnvironment/sanitizedCodexEnvironment do.
+  const opencodeEnvironment = process.env
+  const opencodeExecutablePath = resolveExecutableOnPath(opencodeCommand)
+  const opencodeReady = Boolean(opencodeExecutablePath)
+  let opencodeDriver: OpenCodeAgentDriver | undefined
+  if (opencodeReady) {
+    opencodeDriver = new OpenCodeAgentDriver(agentOs.supervisor, {
+      command: opencodeExecutablePath!,
+      environment: opencodeEnvironment,
+    })
+    agentOs.registerProviderAdapter(createOpenCodeProviderAdapterV1({
+      driver: opencodeDriver,
+      command: opencodeCommand,
+      environment: opencodeEnvironment,
+      resolveExecutable: () => opencodeExecutablePath,
+      probeVersion: () => {
+        const result = spawnSync(opencodeCommand, ['--version'], {
+          encoding: 'utf8',
+          env: opencodeEnvironment,
+          timeout: 10_000,
+        })
+        return (result.stdout || '').trim() || null
+      },
+    }))
+    agentOs.registerDriver(opencodeDriver)
+  }
   const codexContractDriver = contractRouting.enabled
     ? new ProviderContractAgentDriverV1({
         registry: agentOs.providerAdapters,
@@ -631,6 +667,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     try { codexProvider.dispose() } catch (error) { failures.push(error) }
     try { await codexSupervisor.stop() } catch (error) { failures.push(error) }
     try { qwenDriver?.dispose() } catch (error) { failures.push(error) }
+    try { opencodeDriver?.dispose() } catch (error) { failures.push(error) }
     try { unbindCompatibilityFailureJournal?.() } catch (error) { failures.push(error) }
     unbindCompatibilityFailureJournal = undefined
     try { compatibilityFailureJournal?.close() } catch (error) { failures.push(error) }
@@ -719,7 +756,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       agentOs.registerClaude(maestro)
       const codex = codexReady ? new CodexManagedAgentRuntime(db, bus, codexDriver, codexProvider) : undefined
       const qwen = qwenDriver ? new QwenManagedAgentRuntime(db, bus, qwenDriver) : undefined
-      manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor, qwen)
+      const opencode = opencodeDriver ? new OpenCodeManagedAgentRuntime(db, bus, opencodeDriver) : undefined
+      manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor, qwen, opencode)
       return manager
     }, {
       // Read lazily: `orgSync` is assigned after listen(), and the supervisor replaces its
@@ -799,6 +837,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
           claude,
           codex,
           qwen: discoverQwenProviderExecutableV1(),
+          opencode: discoverOpenCodeProviderExecutableV1(),
           kimi: discoverKimiProviderExecutableV1(),
         }
       },

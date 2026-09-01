@@ -25,3 +25,27 @@ it('reap stops sessions whose agent is gone, sparing live ones', () => {
   expect(status('legacy-qwen:2')).toEqual({ status: 'running', control_state: 'active' })
   expect((db.prepare(`SELECT ended_at FROM agent_sessions WHERE id='legacy-qwen:1'`).get() as any).ended_at).toBeTruthy()
 })
+
+// reap() is provider-agnostic (matches by agent status, never a provider
+// literal) — this mirrors the Qwen case above for legacy-opencode:* sessions
+// to confirm OpenCode's managed sessions get the same zombie-cleanup parity.
+it('reap stops opencode sessions whose agent is gone, sparing live ones', () => {
+  const db = openDb(':memory:')
+  db.prepare(`INSERT INTO boards (id, project_path, name) VALUES (1, '/p', 'p')`).run()
+  db.prepare(`INSERT INTO agents (id, board_id, name, status, kind) VALUES (3, 1, 'dead-opencode', 'gone', 'hired')`).run()
+  db.prepare(`INSERT INTO agents (id, board_id, name, status, kind) VALUES (4, 1, 'live-hare', 'active', 'hired')`).run()
+  db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+    VALUES ('w2', 1, 'w', 'shared', '/p', 'active')`).run()
+  const insert = db.prepare(`INSERT INTO agent_sessions (id, workspace_id, agent_id, provider, status)
+    VALUES (?, 'w2', ?, 'opencode', ?)`)
+  insert.run('legacy-opencode:3', 3, 'running')
+  insert.run('legacy-opencode:4', 4, 'running')
+
+  reap(db)
+
+  const status = (id: string) =>
+    (db.prepare(`SELECT status, control_state FROM agent_sessions WHERE id=?`).get(id) as any)
+  expect(status('legacy-opencode:3')).toEqual({ status: 'stopped', control_state: 'stopped' })
+  expect(status('legacy-opencode:4')).toEqual({ status: 'running', control_state: 'active' })
+  expect((db.prepare(`SELECT ended_at FROM agent_sessions WHERE id='legacy-opencode:3'`).get() as any).ended_at).toBeTruthy()
+})

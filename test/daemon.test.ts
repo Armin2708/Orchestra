@@ -169,7 +169,7 @@ it('composes and refreshes the daemon tool surface from verified provider eviden
     ],
   })
   const discovery = (
-    providerId: 'claude' | 'codex' | 'qwen' | 'kimi',
+    providerId: 'claude' | 'codex' | 'qwen' | 'opencode' | 'kimi',
     version: string | null,
     status: 'validated' | 'missing' = 'validated',
   ) => ({
@@ -179,6 +179,7 @@ it('composes and refreshes the daemon tool surface from verified provider eviden
       claude: 'claude-agent-sdk',
       codex: 'codex-app-server',
       qwen: 'qwen-code-cli',
+      opencode: 'opencode-server-sdk',
       kimi: 'kimi-code-acp',
     }[providerId],
     status,
@@ -194,6 +195,7 @@ it('composes and refreshes the daemon tool surface from verified provider eviden
     claude: discovery('claude', '2.1.212'),
     codex: discovery('codex', codexVersion),
     qwen: discovery('qwen', null, 'missing'),
+    opencode: discovery('opencode', null, 'missing'),
     kimi: discovery('kimi', null, 'missing'),
   })
   const acceptanceMatrix: DeclaredProviderAcceptanceMatrixV1 = {
@@ -236,7 +238,7 @@ it('composes and refreshes the daemon tool surface from verified provider eviden
       executable: { health: 'validated' },
     })
   expect(current.matrix.map((row) => row.provider_id).sort())
-    .toEqual(['claude', 'codex', 'kimi', 'qwen'])
+    .toEqual(['claude', 'codex', 'kimi', 'opencode', 'qwen'])
   expect(current.matrix.filter((row) => row.provider_id !== 'codex')
     .every((row) => row.managed_support !== 'supported')).toBe(true)
 

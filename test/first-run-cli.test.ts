@@ -214,7 +214,7 @@ describe('first-run CLI registrar', () => {
   it('rejects an invalid provider before any action', async () => {
     const { run } = setup()
     await expect(run('onboard', '--provider', 'imaginary')).rejects.toThrow(
-      'provider must be claude|codex|qwen|kimi',
+      'provider must be claude|codex|qwen|opencode|kimi',
     )
   })
 })

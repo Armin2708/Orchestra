@@ -13,7 +13,7 @@ export type OperatorTelemetryConsent = 'off' | 'redacted'
 export type OperatorTelemetryInput = {
   event: OperatorTelemetryEvent
   properties?: {
-    provider?: 'claude' | 'codex' | 'qwen' | 'kimi'
+    provider?: 'claude' | 'codex' | 'qwen' | 'kimi' | 'opencode'
     execution_mode?: 'native_subscription' | 'provider_api'
     result?: 'passed' | 'blocked' | 'failed'
     platform?: 'darwin' | 'linux' | 'win32' | 'other'
@@ -30,7 +30,7 @@ export type OperatorTelemetryEnvelopeV1 = {
 }
 
 const PROPERTY_VALUES = Object.freeze({
-  provider: ['claude', 'codex', 'qwen', 'kimi'],
+  provider: ['claude', 'codex', 'qwen', 'kimi', 'opencode'],
   execution_mode: ['native_subscription', 'provider_api'],
   result: ['passed', 'blocked', 'failed'],
   platform: ['darwin', 'linux', 'win32', 'other'],

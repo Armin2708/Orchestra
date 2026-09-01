@@ -6,9 +6,25 @@
 ## Goal
 
 Add OpenCode (`sst/opencode`) as a fourth first-class agent provider alongside Claude,
-Codex, and Qwen — full parity: hireable, streamed board events, interrupt/stop, resume,
-live model catalog. Not a stub registration like Kimi (`release_state: 'unsupported'`,
-capabilities `unknown`); this should work end-to-end.
+Codex, and Qwen: hireable, streamed board events, interrupt/stop, resume, live model
+catalog. Not a stub registration like Kimi (`release_state: 'unsupported'`); this should
+work end-to-end at the same tier Qwen is at today.
+
+**Correction from initial framing (per `[[Agentboard - Subscription-First Terminal Agent
+Compatibility]]`, an active ADR):** "full parity with Claude/Codex/Qwen" does not mean
+passing the documented eight-gate acceptance harness (install provenance, subscription
+readiness + negative API-fallback checks, resume-after-restart, cancellation,
+effective-model evidence, capability/approval/redaction/usage semantics, raw-PTY
+coexistence, revoked-credential handling, clean-machine packaging + a real
+subscription-billed run). That harness is a separate, long-running track
+(`TOOL-014`/`BASE-010`) that hasn't been completed even for Codex, the most mature
+third-party integration — Codex itself is still `release_state: 'candidate'`, not
+`'supported'`. Qwen and Kimi are explicitly logged as "unsupported managed providers"
+despite having working drivers. This spec targets the same honest tier: a real,
+working driver/adapter/manifest registered as `release_state: 'candidate'`, with
+per-mode `support.state: 'unknown'` until a real acceptance run happens — never
+silently promoted to `'supported'`. Running the eight-gate harness is explicitly out of
+scope for this pass (see "Out of scope" below).
 
 ## Why this isn't a drop-in copy of the Qwen driver
 
@@ -50,8 +66,11 @@ Orchestra's existing per-provider shape is four layers:
 
 OpenCode fits this shape unchanged at layers 1, 3, and 4. The only structural difference
 is layer 2: instead of spawning a CLI process per turn, `OpenCodeAgentDriver` manages
-**one long-lived `opencode serve` process per workspace**, reused across turns and
-sessions, and talks to it over HTTP + SSE via `@opencode-ai/sdk`.
+**one long-lived, daemon-wide `opencode serve` process** — verified against
+`@opencode-ai/sdk@1.18.25`'s actual types: every session/event endpoint takes an
+optional `directory` query param, so one process serves every workspace, directory-scoped
+per call, rather than needing one process per workspace. It talks to that process over
+HTTP + SSE via `@opencode-ai/sdk`.
 
 Process lifecycle (spawn, health-check, crash detection, restart) is **not**
 reimplemented — it's delegated to the existing `RuntimeSupervisor`, the same
@@ -65,16 +84,21 @@ work the Qwen driver already does when it maps `assistant`/`tool_use`/`result` e
 New files:
 
 - **`src/runtime/drivers/opencode.ts`** — `OpenCodeAgentDriver implements AgentDriver`.
-  - `launch()`: request (or reuse) a `RuntimeSupervisor`-managed `opencode serve` process
-    bound to the workspace's cwd on an ephemeral port; wait for readiness (a successful
-    call against the server's `/doc` endpoint); create a session via
-    `client.session.create({directory: cwd})`; send the initial prompt if present.
-  - `send()` / `interrupt()` / `stop()`: map onto SDK session calls
-    (message send / session abort / session end). `stop()` decrements a per-workspace
-    reference count on the server process and only tears it down via
-    `RuntimeSupervisor.stop()` once no session still holds it.
-  - `events()`: subscribe to `/event?directory=<cwd>` SSE, filter to the session id, map
-    event types (table below) to `DriverEvent`.
+  - `launch()`: lazily starts (or reuses) the **one** `RuntimeSupervisor`-managed
+    `opencode serve` process for the whole daemon on a fixed ephemeral port chosen at
+    first launch; waits for readiness (the `"opencode server listening on …"` stdout
+    line, read through `RuntimeSupervisor`'s output stream); creates a session via
+    `client.session.create({query: {directory: cwd}})`; sends the initial prompt via
+    `client.session.prompt(...)` if present. Every subsequent call for this session
+    passes the same `directory` so multiple workspaces safely share the one server.
+  - `send()` → `client.session.prompt({path: {id: sessionId}, query: {directory}, body: {parts: [{type: 'text', text}]}})`.
+  - `interrupt()`/`cancel()` → `client.session.abort({path: {id: sessionId}, query: {directory}})`.
+  - `stop()` → abort, then decrement a process-wide reference count; the shared server is
+    only torn down via `RuntimeSupervisor.stop()` once zero sessions across all
+    workspaces still reference it.
+  - `events()`: subscribes once to `client.event.subscribe({query: {directory: cwd}})`
+    (SSE `GlobalEvent = {directory, payload: Event}`), filters to events whose
+    `sessionID` matches, and maps them to `DriverEvent` per the table below.
 - **`src/runtime/drivers/opencode-provider-adapter.ts`** — mirrors
   `qwen-provider-adapter.ts`: executable discovery via `opencode --version`; **live**
   model catalog queried from the running server's config/provider-list endpoint (not a
@@ -106,25 +130,23 @@ against the current tree):
 
 ## Data flow & event mapping
 
-Launch sequence:
+Launch sequence (see Components above for the exact SDK calls). One
+`RuntimeSupervisor`-managed `opencode serve` process serves the whole daemon; each
+session/event call carries its own `directory` query param to scope it to a workspace.
 
-```
-RuntimeSupervisor.spawn({command: 'opencode', args: ['serve', '--port', N], cwd})
-  → poll readiness (GET /doc)
-  → client.session.create({directory: cwd})
-  → if prompt present: session.prompt(...)
-```
+**Event mapping** — verified against `@opencode-ai/sdk@1.18.25`'s real `Event` union in
+`dist/gen/types.gen.d.ts`. The DeepWiki-sourced names used in initial research
+(`EventSessionNextTextDelta`, etc.) do not exist in this version and are discarded:
 
-SSE → `DriverEvent` mapping:
-
-| OpenCode event | `DriverEvent.type` | Notes |
+| OpenCode SSE event (`payload.type`) | `DriverEvent.type` | Notes |
 |---|---|---|
-| `EventSessionNextTextDelta` | `output` | `metadata.kind: 'text'` |
-| tool-call part event | `tool` | `metadata.kind: 'tool_call'` |
-| tool-result part event | `tool` | `metadata.kind: 'tool_result'` |
-| `EventSessionUpdated` (idle/completed) | `status` | turn-completion signal |
-| `EventSessionError` / stream error | `error` | |
-| session end / server process exit | `exit` | see error handling below |
+| `message.part.updated` where `part.type === 'text'` | `output` | `metadata.kind: 'text'`; `delta` carries incremental text |
+| `message.part.updated` where `part.type === 'tool'` | `tool` | `part.state.status` (`pending`/`running`/`completed`/`error`) → `tool_call`/`tool_result`; `part.tool` is the tool name, `part.callID` the call id |
+| `message.updated` where `info.role === 'assistant'` | `status` | carries `info.cost`, `info.tokens.{input,output,reasoning,cache}` directly off `AssistantMessage` — no reconstruction needed, unlike Qwen's separate `result` event |
+| `session.idle` | `status` | `phase: 'turn_completed'` |
+| `session.error` | `error` | `properties.error` is a typed union (`ProviderAuthError`\|`UnknownError`\|`MessageOutputLengthError`\|`MessageAbortedError`\|`ApiError`); `ProviderAuthError` feeds `auth_status` probing |
+| `permission.updated` / `permission.replied` | `status` | feeds the `approvals` capability |
+| server process `process.failed`/`process.lost` (via `RuntimeSupervisor`, not SSE) | `error` + `exit` | see error handling below |
 
 ## Auth & model catalog
 
@@ -142,27 +164,31 @@ provider's catalog.
 
 ## Error handling / process lifecycle
 
-- **Port allocation**: an ephemeral free port per workspace, not a hardcoded `4096` — more
-  than one workspace/board can run OpenCode concurrently.
+- **Port allocation**: one ephemeral free port for the single daemon-wide server,
+  allocated at first launch and reused for the daemon's lifetime.
 - **Server crash mid-session**: `RuntimeSupervisor` already emits
   `process.failed`/`process.lost`; the driver maps that into `error` + `exit`
-  `DriverEvent`s for every session attached to that server — the same pattern
-  `ShellAgentDriver` uses today for supervisor lifecycle events.
-- **Cold start latency**: first launch on a workspace pays the server boot cost once;
-  surfaced as its own `status` event (`phase: 'server_starting'`) so the UI can
-  distinguish "server booting" from "turn running" instead of the latency being silently
-  absorbed into the first turn.
-- **Reference counting**: the server process is not stopped while any session still holds
-  it; `stop()` decrements the count and only tears down the process at zero.
+  `DriverEvent`s for every session across every workspace attached to that server — the
+  same pattern `ShellAgentDriver` uses today for supervisor lifecycle events. A crash
+  also resets the reference count and clears the cached server handle so the next
+  `launch()` restarts it.
+- **Cold start latency**: only the very first OpenCode launch on the daemon pays the
+  server boot cost; surfaced as its own `status` event (`phase: 'server_starting'`) so
+  the UI can distinguish "server booting" from "turn running" instead of the latency
+  being silently absorbed into the first turn.
+- **Reference counting**: the shared server process is not stopped while any session in
+  any workspace still holds it; `stop()` decrements the count and only tears down the
+  process at zero.
 
 ## Governance / manifest release state
 
-Registered as `release_state: 'experimental'` from the start — not `'unsupported'` like
-Kimi's stub registration, since the goal here is working parity, not placeholder
-registration. Per-mode `support.state` starts `'unknown'` with a `reason_code` until the
-live readiness probe is verified end-to-end, then flips to `'supported'` — the same
-staged pattern Qwen's own manifest already documents (`candidate` release state,
-per-mode `unknown` pending specific integration work).
+Registered as `release_state: 'candidate'` from the start — matching Qwen's manifest
+exactly, not `'unsupported'` like Kimi's stub. Per-mode `support.state` stays `'unknown'`
+with an explicit `reason_code` (e.g. `acceptance_harness_not_run`) — it is **not**
+flipped to `'supported'` by this work. Promotion to `'supported'` is a separate,
+explicitly out-of-scope effort gated on the eight-gate acceptance harness described in
+the Goal section above, consistent with how Codex/Qwen remain unpromoted today despite
+working drivers. This build must not silently claim parity it hasn't earned.
 
 ## Testing
 
@@ -186,8 +212,14 @@ git worktree add --detach /tmp/chk HEAD && cd /tmp/chk && npx tsc --noEmit
 
 ## Out of scope for this pass
 
+- The eight-gate acceptance harness and any promotion to `release_state: 'supported'` —
+  tracked separately, matching `TOOL-014`/`BASE-010` precedent for Codex/Qwen.
+- Whether OpenCode's own upstream-provider terms permit autonomous/non-interactive use
+  the way Alibaba's Coding Plan terms blocked autonomous Qwen orchestration — OpenCode is
+  bring-your-own-key/provider rather than a single subscription product, so this gate may
+  not map the same way. Flagged as unresolved, not assumed either way.
 - Hard role/permission gating beyond what Claude/Codex/Qwen already enforce.
 - Any OpenCode-specific UI beyond reusing the existing provider picker/model-select
   components (`web/src/agentProviderUi.ts`) — no bespoke OpenCode UI surface.
-- Multi-server load balancing — one `opencode serve` process per workspace is sufficient
-  for this pass.
+- Multi-server load balancing — one shared `opencode serve` process for the whole
+  daemon is sufficient for this pass.

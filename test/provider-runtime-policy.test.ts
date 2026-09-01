@@ -116,6 +116,12 @@ describe('provider runtime operation policy', () => {
         state: 'unsupported',
         reason: 'managed_adapter_not_implemented',
       },
+      {
+        provider: 'opencode',
+        mode: 'native_subscription',
+        state: 'unsupported',
+        reason: 'acceptance_harness_not_run',
+      },
     ])
   })
 
