@@ -7,6 +7,7 @@
 // ever restarts the daemon or a running agent.
 
 import type Database from 'better-sqlite3'
+import { ENVIRONMENT_COMPATIBILITY_CONTRACT } from './environment-compatibility.js'
 import { compareExecutableSemver, parseExecutableSemver } from './provider-executable-version.js'
 
 export type ProviderUpdateState = {
@@ -19,14 +20,32 @@ export type ProviderUpdateState = {
   checked_at: string | null
   /** Set when "latest" could not be determined — the UI must not claim "up to date". */
   unknown_reason?: string
+  /**
+   * True when this provider is protocol-pinned (currently only codex) and the
+   * installed CLI does not match the pin. Distinct from an ordinary "update
+   * available": the fix is reinstalling the exact pinned version, not upgrading
+   * further toward npm's `latest`.
+   */
+  pin_drift?: boolean
 }
+
+const PINNED_CODEX_VERSION =
+  ENVIRONMENT_COMPATIBILITY_CONTRACT.providers.codex.managed.validated_versions[0]
 
 // Each provider CLI is distributed as an npm package; its dist-tag `latest` is the
 // authoritative upstream version. Providers absent from this map report unknown
 // rather than a wrong "up to date".
-const PROVIDER_PACKAGES: Readonly<Record<string, { pkg: string; update: string }>> = {
+//
+// codex is the one exception: it is protocol-pinned (environment-compatibility.json
+// validates exactly one version; every other version is unsupported), so it never
+// gets an `@latest` nudge — see `evaluateProviderUpdate`.
+const PROVIDER_PACKAGES: Readonly<Record<string, { pkg: string; update: string; pinnedVersion?: string }>> = {
   claude: { pkg: '@anthropic-ai/claude-code', update: 'claude update' },
-  codex: { pkg: '@openai/codex', update: 'npm install --global @openai/codex@latest' },
+  codex: {
+    pkg: '@openai/codex',
+    update: `npm install --global @openai/codex@${PINNED_CODEX_VERSION}`,
+    pinnedVersion: PINNED_CODEX_VERSION,
+  },
   qwen: { pkg: '@qwen-code/qwen-code', update: 'npm install --global @qwen-code/qwen-code@latest' },
   kimi: { pkg: '@moonshot-ai/kimi-cli', update: 'npm install --global @moonshot-ai/kimi-cli@latest' },
 }
@@ -111,18 +130,26 @@ export const evaluateProviderUpdate = (
   checkedAt: string | null,
 ): ProviderUpdateState => {
   const installedSemver = parseExecutableSemver(installed)
-  const latestSemver = parseExecutableSemver(latest)
+  const pinnedVersion = PROVIDER_PACKAGES[providerId]?.pinnedVersion
+  const pinnedSemver = parseExecutableSemver(pinnedVersion ?? null)
+  // A pinned provider's "latest" is the pin itself, never npm's `latest` dist-tag —
+  // reported for display even when the registry lookup was skipped or failed.
+  const latestSemver = pinnedSemver ?? parseExecutableSemver(latest)
   const base = {
     provider_id: providerId,
     // CLIs report versions as free text ("codex-cli 0.146.0"); publish the parsed
     // semver so callers can render it directly instead of re-parsing the banner.
     installed: installedSemver?.value ?? installed,
-    latest: latestSemver?.value ?? latest,
+    latest: latestSemver?.value ?? (pinnedVersion ?? latest),
     update_command: providerUpdateCommand(providerId),
     checked_at: checkedAt,
   }
   if (!installedSemver) {
     return { ...base, update_available: false, unknown_reason: 'installed version is unknown' }
+  }
+  if (pinnedSemver) {
+    const drifted = compareExecutableSemver(installedSemver.tuple, pinnedSemver.tuple) !== 0
+    return { ...base, update_available: drifted, pin_drift: drifted }
   }
   if (!latestSemver) {
     return { ...base, update_available: false, unknown_reason: 'upstream latest version is unavailable' }
@@ -148,6 +175,11 @@ export const checkProviderUpdate = async (
   const packaged = PROVIDER_PACKAGES[providerId]
   if (!packaged) {
     return evaluateProviderUpdate(providerId, installed, null, null)
+  }
+  // Pin drift is detected against the local contract, not the registry — a pinned
+  // provider never needs an npm lookup (and must still detect drift if npm is down).
+  if (packaged.pinnedVersion) {
+    return evaluateProviderUpdate(providerId, installed, null, new Date(now).toISOString())
   }
   const cached = readCache(db, providerId)
   if (isFresh(cached, now)) {

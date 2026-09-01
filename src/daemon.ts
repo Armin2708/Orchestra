@@ -12,6 +12,7 @@ import { openDb } from './db.js'
 import { buildServer } from './server.js'
 import { reap, bounceDeadLetters } from './reaper.js'
 import { createGraphifyAutoSync } from './agent-os/knowledge-graphify-autosync.js'
+import { checkCodexDriftAndAlert } from './codex/drift-alert.js'
 import { cardWorktree } from './shipqueue.js'
 import { Conductor } from './conductor.js'
 import { ensureAgentToken, ensureToken } from './token.js'
@@ -1068,7 +1069,13 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   const graphifySync = createGraphifyAutoSync(db)
   graphifySync.tick() // boards with a knowledge graph get a fresh Wiki at boot
-  reapTimer = setInterval(() => { reap(db); reconcileActiveWork(); graphifySync.tick() }, 60_000)
+  reapTimer = setInterval(() => {
+    reap(db); reconcileActiveWork(); graphifySync.tick()
+    // initialize() only classifies the Codex CLI once, at boot — a codex self-update
+    // mid-session left health stale "ready" until restart. Re-probe on the same tick
+    // so drift is caught (and mailed to every board) within 60s, not next restart.
+    if (codexReady) void checkCodexDriftAndAlert(db, codexProvider).catch(() => undefined)
+  }, 60_000)
   // best-effort: surface a freshly-upgraded Claude CLI's model catalog (e.g. a newly
   // released Opus) at boot, without waiting for the first agent to start
   void maestro?.refreshModelCatalog().catch(() => undefined)
