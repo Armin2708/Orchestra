@@ -25,6 +25,17 @@ export interface TuiQuestion {
   body: string
 }
 
+export interface TuiAgent {
+  id: number
+  name: string
+  status: string
+  lastSeen: string
+  capabilities: string[]
+  effortRank: number | null
+  /** Cards this agent owns that aren't done yet — what they're currently working on. */
+  cards: TuiCard[]
+}
+
 export interface TuiLogLine {
   ts: string
   tag: string
@@ -43,7 +54,7 @@ export type TuiMode = 'home' | 'connecting' | 'celebrate'
 
 export interface TuiState {
   boardName: string
-  agents: string[]
+  agents: TuiAgent[]
   org: TuiOrgStatus | null
   passwordSet: boolean
   tab: TuiTab
@@ -55,7 +66,7 @@ export interface TuiState {
   logScroll: number
   selected: number
   scroll: number
-  detail: TuiCard | null
+  detail: TuiAgent | null
   status: string
 }
 
@@ -130,8 +141,8 @@ export function renderFrame(state: TuiState, rows: number, cols: number): string
   if (state.tab === 'home' && state.mode === 'connecting') lines.push(...renderHyper(state, height, cols))
   else if (state.tab === 'home' && state.mode === 'celebrate') lines.push(...renderCelebrate(state, height, cols))
   else if (state.tab === 'home') lines.push(...renderHome(state, height, cols))
-  else if (state.detail) lines.push(...renderDetail(state.detail, height, cols))
-  else if (state.tab === 'board') lines.push(...renderCards(state, height, cols))
+  else if (state.detail) lines.push(...renderAgentDetail(state.detail, state, height, cols))
+  else if (state.tab === 'board') lines.push(...renderAgents(state, height, cols))
   else if (state.tab === 'inbox') lines.push(...renderQuestions(state, height, cols))
   else lines.push(...renderLogs(state, height, cols))
 
@@ -262,18 +273,27 @@ function renderCelebrate(state: TuiState, height: number, cols: number): string[
 
 // ─── Board / Inbox / Detail (v1 views) ───────────────────────────────────────
 
-function renderCards(state: TuiState, height: number, cols: number): string[] {
-  if (state.cards.length === 0) return fill([` ${dim('no open cards')}`], height)
+const STATUS_LABEL: Record<string, string> = {
+  active: 'working', idle: 'idle', gone: 'gone',
+  paused_limit: 'paused (limit)', paused_provider: 'paused (provider)',
+}
+const statusLabel = (status: string): string => STATUS_LABEL[status] ?? status
+const statusColor = (status: string): ((s: string) => string) =>
+  status === 'active' ? green : status.startsWith('paused') ? yellow : dim
+
+function renderAgents(state: TuiState, height: number, cols: number): string[] {
+  if (state.agents.length === 0) return fill([` ${dim('no agents on this board')}`], height)
   const rows: string[] = []
-  for (let i = state.scroll; i < Math.min(state.cards.length, state.scroll + height); i++) {
-    const c = state.cards[i]
+  for (let i = state.scroll; i < Math.min(state.agents.length, state.scroll + height); i++) {
+    const a = state.agents[i]
     const active = i === state.selected
-    const id = pad(`#${c.id}`, 6)
-    const col = pad(c.column, 12)
-    const owner = truncate(c.owner ?? 'unowned', 24)
-    const title = truncate(c.title, Math.max(10, cols - 6 - 12 - owner.length - 8))
     const marker = active ? accent('❯ ') : '  '
-    rows.push(` ${marker}${accent(id)}${columnColor(col)}${active ? bold(title) : title} ${dim(`(${owner})`)}`)
+    const name = pad(a.name, 20)
+    const status = pad(statusLabel(a.status), 16)
+    const card = a.cards[0]
+    const workRaw = card ? `${card.title} [${card.column}]` : 'no active card'
+    const work = truncate(workRaw, Math.max(10, cols - 6 - 20 - 16))
+    rows.push(` ${marker}${active ? bold(name) : accent(name)} ${statusColor(a.status)(status)}${card ? (active ? bold(work) : work) : dim(work)}`)
   }
   return fill(rows, height)
 }
@@ -292,16 +312,59 @@ function renderQuestions(state: TuiState, height: number, cols: number): string[
   return fill(rows, height)
 }
 
-function renderDetail(card: TuiCard, height: number, cols: number): string[] {
-  const width = Math.max(20, cols - 4)
-  const rows: string[] = [
-    ` ${accent(`#${card.id}`)} ${bold(truncate(card.title, width - 8))}`,
-    ` ${dim('column')} ${columnColor(truncate(card.column, 16))}   ${dim('owner')} ${truncate(card.owner ?? 'unowned', 24)}`,
-    ` ${dim('paths')} ${truncate(card.paths.join(', ') || '-', width - 8)}`,
-    '',
-  ]
-  for (const line of wrapText(card.description?.trim() || 'no description', width))
-    rows.push(` ${line}`)
+/** Word-wraps text to width, hard-breaking any single "word" longer than the line
+ * (e.g. a long path) — so shrinking the terminal reflows text instead of cutting it off. */
+function wrap(text: string, width: number): string[] {
+  const flat = scrub(text).replace(/\s+/g, ' ').trim()
+  if (width <= 0 || !flat) return ['']
+  const lines: string[] = []
+  let line = ''
+  for (const word of flat.split(' ')) {
+    let w = word
+    while (w.length > width) {
+      if (line) { lines.push(line); line = '' }
+      lines.push(w.slice(0, width))
+      w = w.slice(width)
+    }
+    if (line && line.length + 1 + w.length > width) { lines.push(line); line = w }
+    else line = line ? `${line} ${w}` : w
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+/** A "label value" row whose value wraps onto further lines indented under it,
+ * instead of getting truncated. */
+function fieldLines(label: string, value: string, width: number, color: (s: string) => string = (s) => s): string[] {
+  const prefix = `${label} `
+  const lines = wrap(value, Math.max(4, width - prefix.length))
+  const indent = ' '.repeat(prefix.length)
+  return lines.map((line, i) => ` ${i === 0 ? `${dim(label)} ` : indent}${color(line)}`)
+}
+
+function renderAgentDetail(agent: TuiAgent, state: TuiState, height: number, cols: number): string[] {
+  const width = Math.max(10, cols - 2)
+  const rows: string[] = []
+  for (const line of wrap(agent.name, width)) rows.push(` ${accent(bold(line))}`)
+  rows.push(...fieldLines('status', statusLabel(agent.status), width, statusColor(agent.status)))
+  rows.push(...fieldLines('project', state.boardName, width))
+  rows.push(...fieldLines('last seen', agent.lastSeen, width))
+  if (agent.capabilities.length) rows.push(...fieldLines('capabilities', agent.capabilities.join(', '), width))
+  rows.push('')
+  if (agent.cards.length === 0) {
+    rows.push(` ${dim('no active card — idle')}`)
+  } else {
+    rows.push(` ${bold('working on')}`)
+    for (const c of agent.cards) {
+      const label = `#${c.id} [${c.column}]`
+      const indent = ' '.repeat(label.length + 1)
+      const titleLines = wrap(c.title, Math.max(4, width - label.length - 1))
+      rows.push(...titleLines.map((line, i) => i === 0
+        ? ` ${accent(`#${c.id}`)} ${columnColor(`[${c.column}]`)} ${line}`
+        : ` ${indent}${line}`))
+      if (c.paths.length) rows.push(...fieldLines('  paths', c.paths.join(', '), width, dim))
+    }
+  }
   return fill(rows.slice(0, height), height)
 }
 
@@ -318,19 +381,6 @@ function renderLogs(state: TuiState, height: number, cols: number): string[] {
     rows.push(` ${dim(entry.ts)}  ${accent(pad(entry.tag, 9))}${bad ? red(text) : warn ? yellow(text) : text}`)
   }
   return fill(rows, height)
-}
-
-function wrapText(text: string, width: number): string[] {
-  const out: string[] = []
-  for (const paragraph of scrub(text.replace(/\r\n?/g, '\n')).split('\n')) {
-    let line = ''
-    for (const word of paragraph.split(/\s+/)) {
-      if (line && line.length + word.length + 1 > width) { out.push(line); line = word }
-      else line = line ? `${line} ${word}` : word
-    }
-    out.push(line)
-  }
-  return out
 }
 
 const fill = (rows: string[], height: number): string[] => {

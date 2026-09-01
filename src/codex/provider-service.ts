@@ -33,6 +33,10 @@ export type CodexProviderServiceOptions = {
   version?: string
   refreshMs?: number
   now?: () => Date
+  /** Overrides how recheckVersion() re-probes the installed CLI. Defaults to
+   * re-running `readCodexCliVersion(command)`; tests inject a controllable probe
+   * instead of shelling out to a real `codex` binary. */
+  versionProbe?: () => string | undefined
 }
 
 const detailForAccount = (account: Record<string, unknown>): string => {
@@ -104,7 +108,8 @@ export class CodexProviderService implements AgentProviderService {
 
   private readonly now: () => Date
   private readonly refreshMs: number
-  private readonly version: string | undefined
+  private readonly versionProbe: () => string | undefined
+  private version: string | undefined
   private runtimeEnabled = false
   private lastAuth: AgentProviderAuthState | undefined
   private lastUsage: AgentProviderUsageSnapshot | undefined
@@ -121,7 +126,8 @@ export class CodexProviderService implements AgentProviderService {
   ) {
     this.now = options.now ?? (() => new Date())
     this.refreshMs = Math.max(1_000, options.refreshMs ?? 30_000)
-    this.version = options.version ?? readCodexCliVersion(options.command)
+    this.versionProbe = options.versionProbe ?? (() => readCodexCliVersion(options.command))
+    this.version = options.version ?? this.versionProbe()
     this.unsubscribeLifecycle = supervisor.onLifecycle((event) => {
       if (event.error) this.lastDetail = event.error
       if (event.type === 'connected') this.lastDetail = undefined
@@ -156,6 +162,25 @@ export class CodexProviderService implements AgentProviderService {
 
   isRuntimeAvailable(): boolean {
     return this.runtimeEnabled && this.supervisor.state === 'running'
+  }
+
+  /**
+   * Re-probe the installed Codex CLI version and flip runtime availability off if
+   * it has drifted off the protocol pin since initialize() (or the last recheck).
+   * Called periodically while the daemon runs, not just at boot, so a codex
+   * self-update mid-session is caught within one tick instead of only on restart.
+   * Edge-triggered: returns true only on the transition into drift, so callers
+   * (e.g. a notification) fire once, not every tick.
+   */
+  recheckVersion(): boolean {
+    if (!this.runtimeEnabled) return false
+    const probed = this.versionProbe()
+    const compatibility = classifyCodexCliVersion(probed)
+    if (compatibility.status === 'validated') return false
+    this.version = probed
+    this.runtimeEnabled = false
+    this.lastDetail = `${compatibility.detail} Reinstall the pinned Codex CLI, then restart Orchestra.`
+    return true
   }
 
   async health(): Promise<AgentProviderHealth> {
