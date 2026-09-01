@@ -111,6 +111,11 @@ export class CodexProviderService implements AgentProviderService {
   private readonly versionProbe: () => string | undefined
   private version: string | undefined
   private runtimeEnabled = false
+  private versionUnverified = false
+  // Kept separate from lastDetail: the onLifecycle listener below clears lastDetail
+  // on every 'connected' event (including the one supervisor.start() fires inside
+  // initialize()), which would wipe this out before initialize() even returns.
+  private versionUnverifiedDetail: string | undefined
   private lastAuth: AgentProviderAuthState | undefined
   private lastUsage: AgentProviderUsageSnapshot | undefined
   private lastCatalog: AgentProviderCatalog | undefined
@@ -135,14 +140,25 @@ export class CodexProviderService implements AgentProviderService {
     })
   }
 
+  /**
+   * Codex's app-server protocol is upstream "experimental" — a version other than
+   * the pin might speak a different wire protocol. Orchestra does not know that in
+   * advance, so it trusts whatever is installed rather than refusing to run it; it
+   * only flags the version as unverified so a real protocol break points straight
+   * at the likely cause instead of reading as a mystery bug.
+   */
+  private unverifiedDetail(compatibilityDetail: string): string {
+    return `${compatibilityDetail} Running on an unverified Codex CLI version — `
+      + 'reinstall @openai/codex@0.146.0 to clear this warning.'
+  }
+
   /** Start once at daemon boot. Authentication gained later is reported but enabled after restart. */
   async initialize(): Promise<boolean> {
     const compatibility = classifyCodexCliVersion(this.version)
-    if (compatibility.status !== 'validated') {
-      this.runtimeEnabled = false
-      this.lastDetail = `${compatibility.detail} Install @openai/codex@0.146.0, then restart Orchestra.`
-      return false
-    }
+    this.versionUnverified = compatibility.status !== 'validated'
+    this.versionUnverifiedDetail = this.versionUnverified
+      ? this.unverifiedDetail(compatibility.detail)
+      : undefined
     try {
       await this.supervisor.start()
     } catch (error) {
@@ -165,38 +181,39 @@ export class CodexProviderService implements AgentProviderService {
   }
 
   /**
-   * Re-probe the installed Codex CLI version and flip runtime availability off if
-   * it has drifted off the protocol pin since initialize() (or the last recheck).
-   * Called periodically while the daemon runs, not just at boot, so a codex
-   * self-update mid-session is caught within one tick instead of only on restart.
-   * Edge-triggered: returns true only on the transition into drift, so callers
-   * (e.g. a notification) fire once, not every tick.
+   * Re-probe the installed Codex CLI version. Called periodically while the daemon
+   * runs, not just at boot, so a codex self-update mid-session is caught within one
+   * tick instead of only on restart. Never blocks the runtime — only updates the
+   * unverified flag health() reports. Edge-triggered: returns true only on the
+   * transition INTO drift, so callers (e.g. a notification) fire once, not every
+   * tick and not again on the (unrequested) transition back to verified.
    */
   recheckVersion(): boolean {
     if (!this.runtimeEnabled) return false
     const probed = this.versionProbe()
     const compatibility = classifyCodexCliVersion(probed)
-    if (compatibility.status === 'validated') return false
+    const wasUnverified = this.versionUnverified
     this.version = probed
-    this.runtimeEnabled = false
-    this.lastDetail = `${compatibility.detail} Reinstall the pinned Codex CLI, then restart Orchestra.`
-    return true
+    this.versionUnverified = compatibility.status !== 'validated'
+    this.versionUnverifiedDetail = this.versionUnverified
+      ? this.unverifiedDetail(compatibility.detail)
+      : undefined
+    return this.versionUnverified && !wasUnverified
   }
 
   async health(): Promise<AgentProviderHealth> {
     const available = this.isRuntimeAvailable()
     const state = this.supervisor.state
-    const status: AgentProviderHealth['status'] = available
-      ? 'ready'
-      : state === 'starting' || state === 'restarting'
-        ? 'degraded'
-        : 'unavailable'
+    const status: AgentProviderHealth['status'] = !available
+      ? (state === 'starting' || state === 'restarting' ? 'degraded' : 'unavailable')
+      : (this.versionUnverified ? 'degraded' : 'ready')
+    const detail = !available ? this.lastDetail : (this.versionUnverified ? this.versionUnverifiedDetail : undefined)
     return {
       available,
       status,
       updated_at: this.now().toISOString(),
       ...(this.version ? { version: this.version } : {}),
-      ...(!available && this.lastDetail ? { detail: this.lastDetail } : {}),
+      ...(detail ? { detail } : {}),
     }
   }
 

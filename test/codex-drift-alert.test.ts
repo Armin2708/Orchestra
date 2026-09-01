@@ -48,9 +48,12 @@ describe('checkCodexDriftAndAlert', () => {
     probed = 'codex-cli 0.150.0'
     expect(await checkCodexDriftAndAlert(db, service)).toBe(true)
 
+    // Orchestra keeps running on the unverified version — this is a heads-up, not
+    // a blocker, so the mail is fyi rather than the old hard-stop framing.
     const mail = db.prepare(`SELECT board_id, mail_type, subject, to_human FROM messages ORDER BY board_id`).all() as any[]
     expect(mail.map((m) => m.board_id)).toEqual([b1, b2])
-    expect(mail[0]).toMatchObject({ mail_type: 'blocker', subject: 'Codex CLI drifted off the pin', to_human: 1 })
+    expect(mail[0]).toMatchObject({ mail_type: 'fyi', subject: 'Codex CLI drifted off the pin', to_human: 1 })
+    expect(service.isRuntimeAvailable()).toBe(true)
 
     // Edge-triggered: a second tick after the same drift must not mail again.
     expect(await checkCodexDriftAndAlert(db, service)).toBe(false)

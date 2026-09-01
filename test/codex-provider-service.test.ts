@@ -127,7 +127,8 @@ describe('Codex provider service', () => {
 // If codex updates itself while the daemon keeps running, health stayed stale
 // "ready" until the next restart — the operator found out from a confusing
 // runtime failure instead of a clear signal. recheckVersion() re-probes on a
-// timer so drift is caught within one tick.
+// timer so drift is caught within one tick. It flags drift, it does not block:
+// the runtime stays available, only the health status softens to "degraded".
 describe('CodexProviderService.recheckVersion', () => {
   const authenticatedRpc = () => ({
     listModels: async () => [],
@@ -136,7 +137,7 @@ describe('CodexProviderService.recheckVersion', () => {
     readUsage: async () => ({}) as any,
   })
 
-  it('flips health from ready to unavailable when the CLI drifts off the pin', async () => {
+  it('flips status from ready to degraded, but stays available, when the CLI drifts off the pin', async () => {
     const db = openDb(':memory:')
     let probed = 'codex-cli 0.146.0'
     const service = new CodexProviderService(db, authenticatedRpc(), new FakeSupervisor(), {
@@ -149,9 +150,10 @@ describe('CodexProviderService.recheckVersion', () => {
     probed = 'codex-cli 0.150.0'
     expect(service.recheckVersion()).toBe(true)
 
-    expect(service.isRuntimeAvailable()).toBe(false)
+    expect(service.isRuntimeAvailable()).toBe(true)
     expect(await service.health()).toMatchObject({
-      status: 'unavailable',
+      available: true,
+      status: 'degraded',
       detail: expect.stringContaining('0.150.0'),
     })
     service.dispose()
@@ -167,11 +169,11 @@ describe('CodexProviderService.recheckVersion', () => {
 
     expect(service.recheckVersion()).toBe(false)
 
-    expect(service.isRuntimeAvailable()).toBe(true)
+    expect(await service.health()).toMatchObject({ status: 'ready' })
     service.dispose()
   })
 
-  it('reports no change on a repeat check once already flagged unavailable', async () => {
+  it('reports no change on a repeat check once already flagged degraded', async () => {
     const db = openDb(':memory:')
     let probed = 'codex-cli 0.146.0'
     const service = new CodexProviderService(db, authenticatedRpc(), new FakeSupervisor(), {
@@ -183,6 +185,24 @@ describe('CodexProviderService.recheckVersion', () => {
     expect(service.recheckVersion()).toBe(true)
 
     expect(service.recheckVersion()).toBe(false)
+    service.dispose()
+  })
+
+  it('clears the unverified flag once the CLI is reinstalled back on the pin', async () => {
+    const db = openDb(':memory:')
+    let probed = 'codex-cli 0.146.0'
+    const service = new CodexProviderService(db, authenticatedRpc(), new FakeSupervisor(), {
+      version: 'codex-cli 0.146.0',
+      versionProbe: () => probed,
+    })
+    await service.initialize()
+    probed = 'codex-cli 0.150.0'
+    service.recheckVersion()
+
+    probed = 'codex-cli 0.146.0'
+    service.recheckVersion()
+
+    expect(await service.health()).toMatchObject({ status: 'ready' })
     service.dispose()
   })
 })
