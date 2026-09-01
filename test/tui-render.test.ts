@@ -6,7 +6,11 @@ import { PET_IDLE, petFrame } from '../src/tui/pet.js'
 
 const state = (over: Partial<TuiState> = {}): TuiState => ({
   boardName: 'agentboard',
-  agents: ['jade-newt', 'builder'],
+  agents: [
+    { id: 1, name: 'jade-newt', status: 'active', lastSeen: '2026-09-01 12:00:00', capabilities: [], effortRank: 1,
+      cards: [{ id: 325, column: 'review', title: 'CLI color + typography pass', owner: 'jade-newt', paths: ['src/cli.ts'] }] },
+    { id: 2, name: 'builder', status: 'idle', lastSeen: '2026-09-01 11:00:00', capabilities: [], effortRank: null, cards: [] },
+  ],
   org: { joined: true, orgName: 'gatewayz', state: 'live' },
   passwordSet: false,
   tab: 'home',
@@ -92,10 +96,20 @@ describe('tui hyperspace + celebrate', () => {
 })
 
 describe('tui board, inbox, logs tabs', () => {
-  it('board tab still lists cards', () => {
+  it('board tab lists agents and what they are working on', () => {
     const frame = renderFrame(state({ tab: 'board' }), 12, 80).join('\n')
+    expect(frame).toContain('jade-newt')
+    expect(frame).toContain('CLI color + typography pass')
+    expect(frame).toContain('builder')
+    expect(frame).toContain('no active card')
+  })
+
+  it('clicking/entering an agent opens their detail — project, status, current card', () => {
+    const frame = renderFrame(state({ tab: 'board', detail: state().agents[0] }), 12, 80).join('\n')
+    expect(frame).toContain('jade-newt')
+    expect(frame).toContain('agentboard') // project = board name
+    expect(frame).toContain('working on')
     expect(frame).toContain('#325')
-    expect(frame).toContain('(unowned)')
   })
 
   it('inbox renders questions', () => {
@@ -122,25 +136,34 @@ describe('tui board, inbox, logs tabs', () => {
   })
 
   it('scrolls the board selection into view', () => {
-    const s = state({ tab: 'board', cards: Array.from({ length: 30 }, (_, i) => ({ id: i, column: 'backlog', title: `card ${i}`, owner: null, paths: [] })), selected: 29 })
+    const s = state({
+      tab: 'board',
+      agents: Array.from({ length: 30 }, (_, i) => ({ id: i, name: `agent-${i}`, status: 'idle', lastSeen: '', capabilities: [], effortRank: null, cards: [] })),
+      selected: 29,
+    })
     clampSelection(s, listRegion(12).height)
     expect(s.scroll).toBe(29 - listRegion(12).height + 1)
-    expect(renderFrame(s, 12, 80).join('\n')).toContain('card 29')
+    expect(renderFrame(s, 12, 80).join('\n')).toContain('agent-29')
   })
 })
 
 describe('tui escape injection', () => {
   it('strips control characters from board-sourced text before it reaches the terminal', () => {
+    const hostileCard = {
+      id: 1,
+      column: 'review',
+      title: 'evil ESCAPE_2J title',
+      owner: 'owner',
+      paths: ['ab'],
+      description: 'body hidden',
+    }
+    const hostileAgent = {
+      id: 1, name: 'owner', status: 'active', lastSeen: '2026-09-01', capabilities: [], effortRank: null,
+      cards: [hostileCard],
+    }
     const hostile = state({
       tab: 'board' as const,
-      cards: [{
-        id: 1,
-        column: 'review',
-        title: 'evil ESCAPE_2J title',
-        owner: 'owner',
-        paths: ['ab'],
-        description: 'body hidden',
-      }],
+      agents: [hostileAgent],
       questions: [{ id: 2, from: 'agent', to: 'all', body: 'ping ESCAPE_2J' }],
       boardName: 'board ESCAPE_31m',
       status: 'oops',
@@ -148,14 +171,14 @@ describe('tui escape injection', () => {
     // Inject the real control bytes at runtime so no raw bytes live in this file.
     const ESC = String.fromCharCode(27)
     const BEL = String.fromCharCode(7)
-    hostile.cards[0].title = `evil ${ESC}[2J${ESC}]0;spoofed${BEL} title`
-    hostile.cards[0].description = `body ${ESC}[8m hidden ${BEL}`
+    hostileCard.title = `evil ${ESC}[2J${ESC}]0;spoofed${BEL} title`
+    hostileCard.description = `body ${ESC}[8m hidden ${BEL}`
     hostile.questions[0].body = `ping ${ESC}[2J`
     hostile.boardName = `board${ESC}[31m`
     for (const view of [
       renderFrame(hostile, 12, 80),
       renderFrame({ ...hostile, tab: 'inbox' as const }, 12, 80),
-      renderFrame({ ...hostile, detail: hostile.cards[0] }, 12, 80),
+      renderFrame({ ...hostile, detail: hostileAgent }, 12, 80),
     ]) {
       const frame = view.join('\n')
       expect(frame).not.toContain(ESC)

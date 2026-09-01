@@ -51,7 +51,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
     if (state.logs.length > LOG_CAP) state.logs.splice(0, state.logs.length - LOG_CAP)
   }
 
-  const items = () => (state.tab === 'board' ? state.cards : state.questions)
+  const items = () => (state.tab === 'board' ? state.agents : state.questions)
 
   const render = () => {
     const { rows, cols } = term.size()
@@ -65,10 +65,17 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
     try {
       const snap = await options.api('GET', `/boards/${options.boardId}/snapshot`)
       state.boardName = snap.board.name
-      state.agents = snap.agents.filter((a: any) => a.status !== 'gone').map((a: any) => a.name)
-      state.cards = snap.cards
+      const cards = snap.cards
         .filter((c: any) => c.column !== 'done')
         .map((c: any) => ({ id: c.id, column: c.column, title: c.title, owner: c.owner ?? null, paths: c.paths ?? [], description: c.description ?? null }))
+      state.cards = cards
+      state.agents = snap.agents
+        .filter((a: any) => a.status !== 'gone')
+        .map((a: any) => ({
+          id: a.id, name: a.name, status: a.status, lastSeen: a.last_seen,
+          capabilities: a.capabilities ?? [], effortRank: a.effort_rank ?? null,
+          cards: cards.filter((c: any) => c.owner === a.name),
+        }))
       state.questions = snap.open_questions
         .map((q: any) => ({ id: q.id, from: q.from_name ?? 'human', to: q.to_name ?? 'all', body: q.body }))
       const seen = new Map<number, string>(state.cards.map((c) => [c.id, c.column]))
@@ -88,7 +95,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
     const org = await orgStatus()
     if (org && org.state !== state.org?.state) log('org-sync', `sync ${org.state}${org.orgName ? ` (${org.orgName})` : ''}`)
     state.org = org
-    if (state.detail) state.detail = state.cards.find((c) => c.id === state.detail!.id) ?? state.detail
+    if (state.detail) state.detail = state.agents.find((a) => a.id === state.detail!.id) ?? state.detail
     render()
   }
 
@@ -199,7 +206,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         })()
         return
       }
-      else if (key.name === 'enter' && state.tab === 'board' && state.cards.length) state.detail = state.cards[state.selected] ?? null
+      else if (key.name === 'enter' && state.tab === 'board' && state.agents.length) state.detail = state.agents[state.selected] ?? null
       else if (key.name === 'up' || key.name === 'k') state.tab === 'logs' ? (state.logScroll += 1) : (state.selected -= 1)
       else if (key.name === 'down' || key.name === 'j') state.tab === 'logs' ? (state.logScroll = Math.max(0, state.logScroll - 1)) : (state.selected += 1)
       else if (key.name === 'r') { state.status = 'refreshing…'; render(); void refresh(); return }
@@ -222,7 +229,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       if (click.y < top || click.y >= top + height) return
       const index = state.scroll + (click.y - top)
       if (index >= items().length) return
-      if (index === state.selected && state.tab === 'board') state.detail = state.cards[index] ?? null
+      if (index === state.selected && state.tab === 'board') state.detail = state.agents[index] ?? null
       else state.selected = index
       render()
     }
@@ -247,7 +254,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 /** Keep the cursor inside the list and the list scrolled around the cursor. */
 export function clampSelection(state: TuiState, height: number): void {
-  const total = state.tab === 'board' ? state.cards.length : state.tab === 'inbox' ? state.questions.length : 0
+  const total = state.tab === 'board' ? state.agents.length : state.tab === 'inbox' ? state.questions.length : 0
   state.selected = Math.max(0, Math.min(state.selected, Math.max(0, total - 1)))
   if (state.selected < state.scroll) state.scroll = state.selected
   if (state.selected >= state.scroll + height) state.scroll = state.selected - height + 1
