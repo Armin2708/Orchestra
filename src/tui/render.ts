@@ -312,21 +312,57 @@ function renderQuestions(state: TuiState, height: number, cols: number): string[
   return fill(rows, height)
 }
 
+/** Word-wraps text to width, hard-breaking any single "word" longer than the line
+ * (e.g. a long path) — so shrinking the terminal reflows text instead of cutting it off. */
+function wrap(text: string, width: number): string[] {
+  const flat = scrub(text).replace(/\s+/g, ' ').trim()
+  if (width <= 0 || !flat) return ['']
+  const lines: string[] = []
+  let line = ''
+  for (const word of flat.split(' ')) {
+    let w = word
+    while (w.length > width) {
+      if (line) { lines.push(line); line = '' }
+      lines.push(w.slice(0, width))
+      w = w.slice(width)
+    }
+    if (line && line.length + 1 + w.length > width) { lines.push(line); line = w }
+    else line = line ? `${line} ${w}` : w
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+/** A "label value" row whose value wraps onto further lines indented under it,
+ * instead of getting truncated. */
+function fieldLines(label: string, value: string, width: number, color: (s: string) => string = (s) => s): string[] {
+  const prefix = `${label} `
+  const lines = wrap(value, Math.max(4, width - prefix.length))
+  const indent = ' '.repeat(prefix.length)
+  return lines.map((line, i) => ` ${i === 0 ? `${dim(label)} ` : indent}${color(line)}`)
+}
+
 function renderAgentDetail(agent: TuiAgent, state: TuiState, height: number, cols: number): string[] {
-  const width = Math.max(20, cols - 4)
-  const rows: string[] = [
-    ` ${accent(bold(truncate(agent.name, width - 2)))}`,
-    ` ${dim('status')} ${statusColor(agent.status)(statusLabel(agent.status))}   ${dim('project')} ${truncate(state.boardName, 28)}   ${dim('last seen')} ${truncate(agent.lastSeen, 20)}`,
-  ]
-  if (agent.capabilities.length) rows.push(` ${dim('capabilities')} ${truncate(agent.capabilities.join(', '), Math.max(10, width - 14))}`)
+  const width = Math.max(10, cols - 2)
+  const rows: string[] = []
+  for (const line of wrap(agent.name, width)) rows.push(` ${accent(bold(line))}`)
+  rows.push(...fieldLines('status', statusLabel(agent.status), width, statusColor(agent.status)))
+  rows.push(...fieldLines('project', state.boardName, width))
+  rows.push(...fieldLines('last seen', agent.lastSeen, width))
+  if (agent.capabilities.length) rows.push(...fieldLines('capabilities', agent.capabilities.join(', '), width))
   rows.push('')
   if (agent.cards.length === 0) {
     rows.push(` ${dim('no active card — idle')}`)
   } else {
     rows.push(` ${bold('working on')}`)
     for (const c of agent.cards) {
-      rows.push(` ${accent(`#${c.id}`)} ${columnColor(pad(c.column, 12))}${truncate(c.title, Math.max(10, width - 20))}`)
-      if (c.paths.length) rows.push(`   ${dim(truncate(c.paths.join(', '), Math.max(10, width - 4)))}`)
+      const label = `#${c.id} [${c.column}]`
+      const indent = ' '.repeat(label.length + 1)
+      const titleLines = wrap(c.title, Math.max(4, width - label.length - 1))
+      rows.push(...titleLines.map((line, i) => i === 0
+        ? ` ${accent(`#${c.id}`)} ${columnColor(`[${c.column}]`)} ${line}`
+        : ` ${indent}${line}`))
+      if (c.paths.length) rows.push(...fieldLines('  paths', c.paths.join(', '), width, dim))
     }
   }
   return fill(rows.slice(0, height), height)

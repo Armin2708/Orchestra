@@ -112,6 +112,23 @@ describe('tui board, inbox, logs tabs', () => {
     expect(frame).toContain('#325')
   })
 
+  it('agent detail wraps long text onto further lines instead of truncating it', () => {
+    const agent = {
+      id: 1, name: 'jade-newt', status: 'active', lastSeen: '2026-09-01 12:00:00',
+      capabilities: [], effortRank: null,
+      cards: [{ id: 325, column: 'review', title: 'a card title long enough that it cannot fit on one narrow line', owner: 'jade-newt', paths: [] }],
+    }
+    const lines = renderFrame(state({ tab: 'board', detail: agent }), 16, 40)
+    const body = lines.slice(3).join('\n') // header/tabs still truncate; only the detail body is in scope
+    // the full title survives (nothing dropped or ellipsized)...
+    expect(body).toContain('narrow line')
+    expect(body).not.toContain('…')
+    // ...spread across more than one line, each within the viewport width
+    const titleLines = lines.filter((l) => /card title|narrow line|cannot fit/.test(l))
+    expect(titleLines.length).toBeGreaterThan(1)
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(40)
+  })
+
   it('inbox renders questions', () => {
     const frame = renderFrame(state({ tab: 'inbox' }), 12, 80).join('\n')
     expect(frame).toContain('Q#35')
