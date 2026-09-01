@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 — 2026-09-01
+
+- **OpenCode as a 4th agent provider** (candidate tier, same honesty level Qwen
+  sits at — not yet through the full acceptance harness). Driven via
+  `opencode serve` + `@opencode-ai/sdk` as one shared, daemon-wide server
+  process, directory-scoped per call, with real per-turn usage. Live model
+  catalog (whichever upstream providers you've configured in OpenCode, no
+  hardcoded list); managed/background launch stays fail-closed until
+  OpenCode's own terms on autonomous use are confirmed.
+- **TUI: Board tab lists agents**, not raw cards — name, status, and current
+  card+column at a glance; click/enter an agent for a detail view (status,
+  project, last seen, capabilities, current card). Long text now wraps to
+  the terminal's width and height instead of being truncated.
+- **Codex reliability fixes**: orchestra's own "update available" prompt used
+  to tell you to `npm install --global @openai/codex@latest`, walking you
+  straight off the protocol-pinned CLI version — it no longer does that.
+  Version drift is now re-checked live (not just at daemon boot) and
+  surfaces as an inbox mail instead of a silent failure. Codex also no
+  longer hard-blocks on an unpinned CLI version — it runs on whatever is
+  installed and flags health as "unverified" instead, so a real (if
+  unverified) Codex update never leaves you stuck; `orchestra doctor` still
+  reports the true validated/unsupported status honestly.
+- **Daemon/cloud hard split** — the cloud dashboard and hub service now live
+  only in their own repos (`orchestra-cloud-dashboard`, `orchestra-cloud-api`);
+  the in-repo cloud bundle (cloud.html, HubApp/HubBoard/hubApi, billing,
+  Clerk) is removed from this repo entirely. `src/hub/` stays here only as
+  the org-sync e2e dev source, now with a mandatory mirror script
+  (`scripts/sync-hub-to-cloud-api.sh`) for any change to it.
+
 ## 0.2.0 — 2026-08-31
 
 - **Interactive terminal session** — bare `orchestra` at a TTY now opens a

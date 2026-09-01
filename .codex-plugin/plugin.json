@@ -1,6 +1,6 @@
 {
   "name": "orchestra",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "description": "Live coordination board for Claude Code and Codex agents.",
   "author": {
     "name": "Armin2708",
