@@ -4,13 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:cloud": "vite --mode cloud",
     "build": "vite build && node scripts/compress-dist.mjs dist",
-    "build:cloud": "vite build --mode cloud && node scripts/rename-cloud-entry.mjs dist && node scripts/compress-dist.mjs dist",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@clerk/react": "^6.14.7",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "react": "^18.3.0",

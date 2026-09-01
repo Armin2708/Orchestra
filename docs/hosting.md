@@ -1,5 +1,13 @@
 # Hosting Orchestra Cloud
 
+> **MOVED (2026-09-01):** the cloud product no longer builds or deploys from this repo.
+> The web UI lives in `../orchestraboard/orchestra-cloud-dashboard` (Vercel) and the hub
+> service in `../orchestraboard/orchestra-cloud-api` (Railway) — deploy from THOSE repos.
+> This repo's `src/hub/` remains the hub's dev source for org-sync e2e tests; mirror any
+> change with `scripts/sync-hub-to-cloud-api.sh` (see CLAUDE.md "Daemon vs cloud").
+> Everything below describing `web/` cloud builds (`build:cloud`, `cloud.html`,
+> `vercel.json` in this repo) is historical.
+
 This is the runbook for standing up the hosted, multi-tenant deployment of Orchestra ("Orchestra
 Cloud"): a Railway-hosted hub server backed by Supabase Postgres, a Vercel-hosted web UI, Clerk
 for auth/orgs, and Stripe for billing. It is written so the whole stack can be rebuilt from
