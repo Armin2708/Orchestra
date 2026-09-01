@@ -93,26 +93,31 @@ describe('Codex provider service', () => {
     missing.dispose()
   })
 
+  // Codex's app-server protocol is upstream "experimental" — a version other than
+  // the pin might speak a different wire protocol. Orchestra used to hard-block
+  // startup on any mismatch; it now trusts whatever is installed and just flags it,
+  // so a real (if unverified) codex update never leaves the operator stuck.
   it.each([
     ['too old', 'codex-cli 0.143.0'],
     ['too new', 'codex-cli 0.147.0'],
-    ['missing', 'not found'],
-  ])('does not start app-server when the CLI is %s', async (_case, version) => {
+    ['unparseable', 'not found'],
+  ])('starts the app-server and reports degraded/unverified, not blocked, when the CLI is %s', async (_case, version) => {
     const db = openDb(':memory:')
     const supervisor = new FakeSupervisor()
     const service = new CodexProviderService(db, {
       listModels: async () => [],
-      readAccount: async () => ({ account: null, requiresOpenaiAuth: true }),
+      readAccount: async () => ({ account: { type: 'apiKey' }, requiresOpenaiAuth: true }),
       readRateLimits: async () => ({}) as any,
       readUsage: async () => ({}) as any,
     }, supervisor, { version })
 
-    expect(await service.initialize()).toBe(false)
-    expect(supervisor.starts).toBe(0)
+    expect(await service.initialize()).toBe(true)
+    expect(supervisor.starts).toBe(1)
+    expect(service.isRuntimeAvailable()).toBe(true)
     expect(await service.health()).toMatchObject({
-      available: false,
-      status: 'unavailable',
-      detail: expect.stringContaining('Install @openai/codex@0.146.0'),
+      available: true,
+      status: 'degraded',
+      detail: expect.stringContaining('unverified'),
     })
     service.dispose()
   })
