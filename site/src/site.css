@@ -104,12 +104,14 @@
     box-shadow: 0 24px 60px rgba(0,0,0,.45);
   }
   .frame img { width: 100%; display: block; }
-  .frame.demo { background: #0d1016; }
-  .frame.demo.playing img { display: none; }
-  .frame.demo.playing .term { display: none; }
+  .frame.demo { background: #0d1016; position: relative; }
+  /* the Lottie overlay crossfades over the screenshot/terminal instead of swapping it */
+  .frame.demo img, .frame.demo .term { transition: opacity .6s ease; }
+  .frame.demo.playing img, .frame.demo.playing .term { opacity: 0; }
   .frame.demo .term { margin-top: 0; border: 0; box-shadow: none; border-radius: 0; }
-  .frame.demo .anim { aspect-ratio: 16 / 9; width: 100%; }
-  .frame.demo .anim svg { display: block; }
+  .frame.demo .anim { position: absolute; inset: 0; opacity: 0; transition: opacity .6s ease; }
+  .frame.demo.playing .anim { opacity: 1; }
+  .frame.demo .anim svg { display: block; width: 100%; height: 100%; }
 
   .pile { display: flex; align-items: center; margin-top: 24px; }
   .pile .av {

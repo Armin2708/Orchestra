@@ -16,8 +16,11 @@ type Pt = [number, number];
 
 function measure(): { W: number; H: number; anchors: Pt[] } {
   const W = window.innerWidth, vh = window.innerHeight;
-  const H = document.documentElement.scrollHeight;
-  const tops = [...document.querySelectorAll("main section, main .final")].map((el) => el.getBoundingClientRect().top + window.scrollY);
+  // size to <main>, never to the document: the document includes this layer itself, so any
+  // over-measurement would ratchet the page taller and push the footer up off the bottom
+  const main = document.querySelector("main")!;
+  const H = Math.round(main.getBoundingClientRect().height);
+  const tops = [...main.querySelectorAll("section, .final")].map((el) => el.getBoundingClientRect().top + window.scrollY);
   const anchors: Pt[] = [
     [-0.12 * W, 0.16 * vh],           // enter from the top-left, above the headline
     [0.42 * W, 0.62 * vh],            // sweep down across the hero
@@ -76,8 +79,7 @@ export function ScrollStrings() {
     const update = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => setGeo(measure())); };
     update();
     const ro = new ResizeObserver(update);
-    ro.observe(document.documentElement);
-    document.querySelector("main") && ro.observe(document.querySelector("main")!);
+    ro.observe(document.querySelector("main")!);
     window.addEventListener("resize", update);
     return () => { ro.disconnect(); window.removeEventListener("resize", update); cancelAnimationFrame(raf); };
   }, []);
