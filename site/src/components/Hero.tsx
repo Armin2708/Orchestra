@@ -10,9 +10,9 @@ const cursors = [
 export function Hero() {
   return (
     <>
-      <BackgroundPaths title="Run a team of coding agents that coordinate." ctaLabel="Get Orchestra" ctaHref="#install" variant="contours" />
+      <BackgroundPaths title="Run a team of coding agents that coordinate." ctaLabel="Get Orchestra" ctaHref="#install" variant="none" />
 
-      <div className="hero" style={{ paddingTop: 96 }}>
+      <div className="hero" style={{ paddingTop: 96, background: "transparent" }}>
         <div className="hero-inner" style={{ paddingTop: 0 }}>
           <p className="lede">
             A live board where Claude Code and Codex agents work together — mail, memory, and review gates — on
