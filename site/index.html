@@ -58,23 +58,39 @@
   }
   .nav-cta:hover { filter: brightness(1.1); }
 
-  /* ── hero: mesh + grid ─────────────────────────────── */
+  /* ── hero: flowing paths ─────────────────────────────── */
   .hero { position: relative; overflow: hidden; }
-  .grid, .noise, .scan { position: absolute; inset: 0; pointer-events: none; }
-  .scan {
-    background-image: linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px);
-    background-size: 100% 3px;
-  }
-  .grid {
-    background-image:
-      linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px);
-    background-size: 44px 44px; opacity: .5;
-  }
+  .noise, .paths, .veil { position: absolute; inset: 0; pointer-events: none; }
   .noise {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
-    opacity: .035;
+    opacity: .035; z-index: 1;
   }
+  .paths { width: 100%; height: 100%; display: block; }
+  .paths path {
+    fill: none; stroke-linecap: round;
+    stroke-dasharray: calc(var(--L, 1600) * .62px) calc(var(--L, 1600) * .38px);
+    animation: flow var(--d, 26s) linear infinite, breathe calc(var(--d, 26s) * .55) ease-in-out infinite alternate;
+    animation-delay: var(--o, 0s), var(--o, 0s);
+  }
+  .paths path.g { stroke: var(--accent); }
+  .paths path.w { stroke: #e9ebf2; }
+  @keyframes flow { to { stroke-dashoffset: calc(var(--L, 1600) * -1px); } }
+  @keyframes breathe { from { opacity: .55; } to { opacity: 1; } }
+  /* dims the lines behind the headline so copy stays legible; fades them into the board window */
+  .veil {
+    background:
+      radial-gradient(ellipse 44% 34% at 50% 33%, rgba(10,12,17,.7), rgba(10,12,17,0) 100%),
+      linear-gradient(to bottom, rgba(10,12,17,0) 0%, rgba(10,12,17,0) 62%, rgba(10,12,17,.8) 78%, var(--bg) 100%);
+  }
+  @media (prefers-reduced-motion: reduce) { .paths path { animation: none; stroke-dasharray: none; } }
+
+  /* headline entrance */
+  .hero h1 .w { display: inline-block; white-space: pre; animation: rise .8s cubic-bezier(.2,.7,.2,1) both; animation-delay: calc(var(--i) * 80ms + 120ms); }
+  .hero .lede, .hero .cta-row, .hero .hero-note { animation: rise .9s cubic-bezier(.2,.7,.2,1) both; }
+  .hero .lede { animation-delay: .55s; } .hero .cta-row { animation-delay: .7s; } .hero .hero-note { animation-delay: .85s; }
+  @keyframes rise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .hero h1 .w, .hero .lede, .hero .cta-row, .hero .hero-note { animation: none; } }
+
   .digits { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .85; }
 
   .hero-inner { position: relative; z-index: 2; max-width: 1180px; margin: 0 auto; padding: 108px 28px 0; text-align: center; }
@@ -358,6 +374,8 @@
     .caret { display: none; }
     .cursor { display: none; }
     .digits { opacity: .5; }
+    .paths path:nth-child(odd) { display: none; }
+    .veil { background: linear-gradient(to bottom, rgba(10,12,17,.35) 0%, rgba(10,12,17,.35) 50%, var(--bg) 100%); }
   }
 </style>
 </head>
@@ -380,10 +398,9 @@
 </nav>
 
 <div class="hero">
-  <div class="grid" aria-hidden="true"></div>
-  <div class="scan" aria-hidden="true"></div>
+  <svg class="paths" id="hero-paths" viewBox="0 0 1440 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true"></svg>
+  <div class="veil" aria-hidden="true"></div>
   <div class="noise" aria-hidden="true"></div>
-  <canvas class="digits" id="digits-hero" aria-hidden="true"></canvas>
 
   <div class="hero-inner">
     <img class="hero-mark" src="assets/orchestra-mark-reversed.svg" alt="Orchestra" width="148" height="93">
@@ -717,6 +734,44 @@
     }
   });
 
+
+  // hero: two mirrored fans of bezier "strings" that sweep in from the top corners, cross behind the
+  // headline, and funnel down into the board window. Flow direction = path direction = downward.
+  const paintPaths = (svg) => {
+    if (!svg) return;
+    const N = 36, W = 1440, frag = document.createDocumentFragment();
+    const seed = (i) => ((i * 9301 + 49297) % 233280) / 233280;
+    const paths = [];
+    for (let i = 0; i < N; i++) {
+      for (const side of [1, -1]) {
+        const x = (v) => side === 1 ? v : W - v;
+        const j = (k, amp) => (seed(i * 7 + k * 13 + (side + 1) * 31) - 0.5) * amp; // per-path jitter
+        const d = `M${x(-90 - i * 12 + j(1, 60))} ${-60 + i * 9 + j(2, 40)}`
+          + ` C${x(220 + i * 5 + j(3, 140))} ${110 + i * 8 + j(4, 90)}, ${x(540 - i * 3 + j(5, 120))} ${380 + i * 4 + j(6, 80)}, ${x(716 + i * 1.5)} ${560 + i * 3.5 + j(7, 30)}`
+          + ` S${x(790 + i * 9 + j(8, 80))} ${900 - i * 2}, ${x(810 + i * 14 + j(9, 60))} ${1100}`;
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        el.setAttribute('d', d);
+        el.setAttribute('stroke-width', (0.7 + i * 0.034).toFixed(2));
+        el.setAttribute('stroke-opacity', (0.16 + i * 0.019).toFixed(3));
+        el.setAttribute('class', i % 3 === 0 ? 'g' : 'w');
+        el.style.setProperty('--d', `${(20 + seed(i + (side + 1) * 40) * 12).toFixed(1)}s`);
+        el.style.setProperty('--o', `${(-seed(i * 3 + side) * 20).toFixed(1)}s`);
+        frag.append(el); paths.push(el);
+      }
+    }
+    svg.replaceChildren(frag);
+    // dash lengths must be in user units: measure each path (pathLength="1" does not scale CSS dasharray in Chromium)
+    for (const el of paths) el.style.setProperty('--L', Math.round(el.getTotalLength()));
+  };
+  paintPaths(document.getElementById('hero-paths'));
+
+  // headline: split into words so each can rise in sequence
+  const h1 = document.querySelector('.hero h1');
+  if (h1) h1.replaceChildren(...h1.textContent.trim().split(/\s+/).flatMap((w, i, a) => {
+    const span = document.createElement('span'); span.className = 'w'; span.style.setProperty('--i', i);
+    span.textContent = i < a.length - 1 ? w + ' ' : w; return [span];
+  }));
+
   // digit field: static, layered sky drawn out of numbers — three depths + specks + dot floor
   const paintDigitSky = (canvas, options) => {
     if (!canvas) return;
@@ -791,12 +846,6 @@
     build();
     window.addEventListener('resize', build);
   };
-  paintDigitSky(document.getElementById('digits-hero'), {
-    seed: 42, floor: true,
-    far:  [[.30, .10, .045], [.62, .30, .04], [.20, .44, .05], [.72, .60, .045], [.48, .74, .04]],
-    mid:  [[.12, .22, .052], [.86, .16, .052], [.93, .52, .052], [.06, .62, .052], [.80, .86, .052]],
-    near: [[.04, .12, .06], [.96, .34, .055], [.10, .88, .05]],
-  });
   paintDigitSky(document.getElementById('digits-final'), {
     seed: 7, floor: false,
     far:  [[.25, .3, .05], [.75, .6, .05]],
