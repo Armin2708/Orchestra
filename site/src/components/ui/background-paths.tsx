@@ -44,7 +44,7 @@ function FloatingPaths({ position, mirror = false }: { position: number; mirror?
     // framer hands to WAAPI so it runs on the compositor with zero main-thread work.
     return (
         <motion.div
-            className="absolute inset-0 pointer-events-none will-change-transform"
+            className="absolute inset-x-0 -top-[10%] h-[72%] pointer-events-none will-change-transform"
             animate={{ x: [0, position * 14, 0], y: [0, 10, 0], opacity: [0.7, 1, 0.7] }}
             transition={{ duration: 22, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
         >
