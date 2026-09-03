@@ -7,8 +7,9 @@ import { FinalCta } from "@/components/FinalCta";
 export default function App() {
   return (
     <>
-      <ScrollStrings />
-      <div className="relative z-10">
+      <div className="relative">
+        <ScrollStrings />
+        <main className="relative z-10">
         <Nav />
         <Hero />
         <Stats />
@@ -21,6 +22,7 @@ export default function App() {
         <Changelog />
         <FinalCta />
         <Footer />
+        </main>
       </div>
     </>
   );

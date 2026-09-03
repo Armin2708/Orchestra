@@ -1,74 +1,99 @@
+import { useEffect, useState } from "react";
 import { motion, useScroll, useSpring, useTransform, type MotionValue } from "framer-motion";
-import { floatingPathsData } from "@/components/ui/background-paths";
 
 /**
- * The hero's two string fans on a fixed full-viewport layer behind the whole page, driven by
- * scroll instead of a timer:
+ * A ribbon of 36 strings that snakes down the entire page in an S: it sweeps across the
+ * hero, turns at the first section and runs down one margin, crosses to the other side
+ * between sections, and so on to the footer. Scrolling draws it: the strings' pathLength
+ * follows a spring-smoothed scroll position, so the ribbon runs ahead of you as you scroll
+ * down and retracts when you scroll up.
  *
- * - `progress` is the scroll position through a spring, so the strings glide and settle.
- * - each string's dash offset is progress × its own rate (+ a phase), so scrolling down makes
- *   the strings travel down their curves at slightly different speeds, and scrolling up
- *   brings them back the same way. Nothing moves when you are not scrolling.
- * - the dash grows longer the further down the page you are, and the fans slide apart /
- *   tilt / dim a little so text over them stays readable.
- *
- * The paths only fade in on load (no draw-in timer), so there is no ambient animation to
- * fight the scroll.
+ * Anchors are measured from the real DOM (each <section> top) so the turns land in the
+ * gaps between sections, where nothing covers them.
  */
-const PX_PER_CYCLE = 1400;
+const N = 36;
+type Pt = [number, number];
 
-function ScrollString({ d, width, id, progress, length }: { d: string; width: number; id: number; progress: MotionValue<number>; length: MotionValue<number> }) {
-  const rate = 0.7 + (id % 6) * 0.12;
-  const phase = (id * 0.037) % 1;
-  const pathOffset = useTransform(progress, (v) => v * rate + phase);
+function measure(): { W: number; H: number; anchors: Pt[] } {
+  const W = window.innerWidth, vh = window.innerHeight;
+  const H = document.documentElement.scrollHeight;
+  const tops = [...document.querySelectorAll("main section, main .final")].map((el) => el.getBoundingClientRect().top + window.scrollY);
+  const anchors: Pt[] = [
+    [-0.12 * W, 0.16 * vh],           // enter from the top-left, above the headline
+    [0.42 * W, 0.62 * vh],            // sweep down across the hero
+    [1.08 * W, 0.98 * vh],            // exit right under the CTA…
+  ];
+  tops.forEach((top, k) => anchors.push([k % 2 === 0 ? 0.92 * W : 0.08 * W, top - 30]));  // …then alternate margins
+  anchors.push([0.5 * W, H + 120]);
+  return { W, H, anchors };
+}
+
+/** Catmull-Rom through the anchors → cubic Bézier path. Each string is a slightly offset, slightly wider copy. */
+function ribbonPath(anchors: Pt[], i: number, W: number): string {
+  const k = (i - N / 2) / (N / 2);                       // -1..1 across the ribbon
+  // spread: strings fan out ~450px across and drift along the ribbon; the outer ones swing
+  // wider on the turns, and a per-string wobble makes neighbours cross and re-cross so the
+  // bundle reads as loose strings (like the hero fan), not one solid band
+  const wobble = Math.sin(i * 1.7) * 0.16, drift = Math.sin(i * 2.3) * 70;
+  const pts: Pt[] = anchors.map(([x, y], j) => [
+    W / 2 + (x - W / 2) * (1 + k * 0.26 + wobble * (j % 2 ? 1 : -1)) + k * 220,
+    y + k * 120 + drift * (j % 3 === 1 ? -1 : 1) + k * (j % 2 ? 50 : -50),
+  ]);
+  const n = pts.length;
+  const at = (j: number) => pts[Math.max(0, Math.min(n - 1, j))];
+  let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let j = 0; j < n - 1; j++) {
+    const p0 = at(j - 1), p1 = at(j), p2 = at(j + 1), p3 = at(j + 2);
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C${c1[0].toFixed(1)} ${c1[1].toFixed(1)}, ${c2[0].toFixed(1)} ${c2[1].toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+
+function String_({ d, i, head }: { d: string; i: number; head: MotionValue<number> }) {
+  // the tips stagger a little so the ribbon's front is a soft edge, not a hard line
+  const pathLength = useTransform(head, (v) => Math.max(0.001, Math.min(1, v * (0.94 + (i % 7) * 0.012))));
   return (
     <motion.path
       d={d}
       stroke="currentColor"
-      strokeWidth={width}
-      strokeOpacity={0.1 + id * 0.03}
-      style={{ pathOffset, pathLength: length }}
+      strokeWidth={0.5 + i * 0.03}
+      strokeOpacity={0.1 + i * 0.03}
+      strokeLinecap="round"
+      style={{ pathLength }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 0.6 }}
-      transition={{ duration: 1.6, delay: id * 0.02 }}
+      transition={{ duration: 1.6, delay: i * 0.02 }}
     />
   );
 }
 
-function ScrollFan({ position, progress, length }: { position: number; progress: MotionValue<number>; length: MotionValue<number> }) {
-  const paths = floatingPathsData(position);
-  return (
-    <div className="absolute inset-0 pointer-events-none">
-      <svg className="w-full h-full text-slate-950 dark:text-white" viewBox="0 0 696 316" fill="none">
-        <title>Background Paths</title>
-        {paths.map((p) => <ScrollString key={p.id} d={p.d} width={p.width} id={p.id} progress={progress} length={length} />)}
-      </svg>
-    </div>
-  );
-}
-
 export function ScrollStrings() {
+  const [geo, setGeo] = useState<{ W: number; H: number; anchors: Pt[] } | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const update = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => setGeo(measure())); };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(document.documentElement);
+    document.querySelector("main") && ro.observe(document.querySelector("main")!);
+    window.addEventListener("resize", update);
+    return () => { ro.disconnect(); window.removeEventListener("resize", update); cancelAnimationFrame(raf); };
+  }, []);
+
   const { scrollY } = useScroll();
   const smooth = useSpring(scrollY, { stiffness: 50, damping: 18, mass: 0.8 });
-  const progress = useTransform(smooth, (v) => v / PX_PER_CYCLE);
-  const length = useTransform(smooth, [0, 4000], [0.42, 0.85]);
+  // drawn fraction: the ribbon runs one viewport ahead of the top of the screen
+  const head = useTransform(smooth, (y) => (geo ? (y + window.innerHeight * 1.05) / geo.H : 0));
 
-  const yA = useTransform(smooth, [0, 3200], [0, -420]);
-  const xA = useTransform(smooth, [0, 3200], [0, -160]);
-  const rA = useTransform(smooth, [0, 3200], [0, -7]);
-  const yB = useTransform(smooth, [0, 3200], [0, 320]);
-  const xB = useTransform(smooth, [0, 3200], [0, 140]);
-  const rB = useTransform(smooth, [0, 3200], [0, 6]);
-  const opacity = useTransform(smooth, [0, 700, 1400], [1, 0.75, 0.55]);
-
+  if (!geo) return null;
   return (
-    <motion.div aria-hidden="true" style={{ opacity }} className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
-      <motion.div style={{ x: xA, y: yA, rotate: rA }} className="absolute inset-0 origin-center">
-        <ScrollFan position={1} progress={progress} length={length} />
-      </motion.div>
-      <motion.div style={{ x: xB, y: yB, rotate: rB }} className="absolute inset-0 origin-center">
-        <ScrollFan position={-1} progress={progress} length={length} />
-      </motion.div>
-    </motion.div>
+    <div aria-hidden="true" className="absolute inset-x-0 top-0 z-0 pointer-events-none overflow-hidden" style={{ height: geo.H }}>
+      <svg className="w-full h-full text-slate-950 dark:text-white" viewBox={`0 0 ${geo.W} ${geo.H}`} preserveAspectRatio="none" fill="none">
+        <title>Background Paths</title>
+        {Array.from({ length: N }, (_, i) => <String_ key={i} i={i} d={ribbonPath(geo.anchors, i, geo.W)} head={head} />)}
+      </svg>
+    </div>
   );
 }
