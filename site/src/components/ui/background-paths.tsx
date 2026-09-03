@@ -3,11 +3,11 @@
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 
-// 21st.dev "Background Paths" — kept verbatim. Only additions: `ctaLabel`/`ctaHref`
-// props (the button links instead of being a dead control) and `will-change` on the
-// SVG wrapper so the per-frame path updates repaint their own compositor layer, and
-// no backdrop-blur on the button: with this SVG behind it Chromium stops painting the
-// rest of the layer (blank headline/nav); on a 95% black button the blur is invisible.
+// 21st.dev "Background Paths" — kept verbatim. Only deltas: `ctaLabel`/`ctaHref` props
+// (the button links instead of being a dead control) and no backdrop-blur on the button:
+// with this SVG behind it Chromium stops painting the rest of the layer (blank
+// headline/nav); on a 95% black button the blur is invisible. Do NOT add will-change or
+// translateZ to the SVG wrapper — a promoted layer that re-rasters every frame flickers.
 function FloatingPaths({ position }: { position: number }) {
     const paths = Array.from({ length: 36 }, (_, i) => ({
         id: i,
@@ -23,7 +23,7 @@ function FloatingPaths({ position }: { position: number }) {
     }));
 
     return (
-        <div className="absolute inset-0 pointer-events-none will-change-transform">
+        <div className="absolute inset-0 pointer-events-none">
             <svg
                 className="w-full h-full text-slate-950 dark:text-white"
                 viewBox="0 0 696 316"
