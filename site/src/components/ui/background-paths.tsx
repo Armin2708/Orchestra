@@ -9,8 +9,9 @@ import { ContourPaths } from "@/components/ui/contour-paths";
 // with this SVG behind it Chromium stops painting the rest of the layer (blank
 // headline/nav); on a 95% black button the blur is invisible. Do NOT add will-change or
 // translateZ to the SVG wrapper — a promoted layer that re-rasters every frame flickers.
-export function FloatingPaths({ position }: { position: number }) {
-    const paths = Array.from({ length: 36 }, (_, i) => ({
+/** The 36 string geometries of one fan — shared with the scroll-driven layer (ScrollStrings.tsx). */
+export function floatingPathsData(position: number) {
+    return Array.from({ length: 36 }, (_, i) => ({
         id: i,
         d: `M-${380 - i * 5 * position} -${189 + i * 6}C-${
             380 - i * 5 * position
@@ -22,6 +23,10 @@ export function FloatingPaths({ position }: { position: number }) {
         color: `rgba(15,23,42,${0.1 + i * 0.03})`,
         width: 0.5 + i * 0.03,
     }));
+}
+
+export function FloatingPaths({ position }: { position: number }) {
+    const paths = floatingPathsData(position);
 
     return (
         <div className="absolute inset-0 pointer-events-none">
