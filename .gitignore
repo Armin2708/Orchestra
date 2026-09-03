@@ -24,3 +24,5 @@ AGENTS.md
 /*.jpg
 .vercel
 .env*
+site/dist
+site/node_modules
