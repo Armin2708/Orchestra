@@ -8,9 +8,9 @@ import { Button } from "@/components/ui/button";
  * 21st.dev "Background Paths", adapted for the Orchestra landing hero.
  *
  * Changes from the original:
- * - the SVG sits on its own compositor layer (`will-change: transform`) so the
- *   per-frame dash updates from framer-motion repaint only the strings, not the
- *   whole page. (A CSS mask on that layer stops it painting — use the veil.)
+ * - strings draw in once, then only transform/opacity animate (see FloatingPaths)
+ *   — the original's per-frame dash raster made the page lag.
+ *   (A CSS mask on the promoted layer stops it painting — use the veil.)
  * - the strings band covers the upper 72% of the hero instead of the whole
  *   box, so the two mirrored fans cross behind the CTA and the veil fades them
  *   into the board window: headline → CTA → board reads as one funnel.
@@ -37,8 +37,17 @@ function FloatingPaths({ position, mirror = false }: { position: number; mirror?
         width: 0.5 + i * 0.03,
     }));
 
+    // Perf: the original animates pathLength/pathOffset on every path every frame,
+    // which re-rasters the whole hero 60×/s and stutters on real hardware. Here the
+    // strings draw in once (~3.5s incl. stagger) and are then static geometry; the
+    // only continuous motion is on the fan *group* (transform + opacity), which
+    // framer hands to WAAPI so it runs on the compositor with zero main-thread work.
     return (
-        <div className="absolute inset-x-0 top-0 h-[72%] pointer-events-none will-change-transform [transform:translateZ(0)]">
+        <motion.div
+            className="absolute inset-0 pointer-events-none will-change-transform"
+            animate={{ x: [0, position * 14, 0], y: [0, 10, 0], opacity: [0.7, 1, 0.7] }}
+            transition={{ duration: 22, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
+        >
             <svg
                 className={`w-full h-full text-slate-950 dark:text-white ${mirror ? "-scale-x-100" : ""}`}
                 viewBox="0 0 696 316"
@@ -53,21 +62,13 @@ function FloatingPaths({ position, mirror = false }: { position: number; mirror?
                         stroke={path.id % 3 === 0 ? "var(--accent)" : "currentColor"}
                         strokeWidth={path.width}
                         strokeOpacity={0.1 + path.id * 0.03}
-                        initial={{ pathLength: 0.3, opacity: 0.6 }}
-                        animate={{
-                            pathLength: 1,
-                            opacity: [0.3, 0.6, 0.3],
-                            pathOffset: [0, 1, 0],
-                        }}
-                        transition={{
-                            duration: 20 + Math.random() * 10,
-                            repeat: Number.POSITIVE_INFINITY,
-                            ease: "linear",
-                        }}
+                        initial={{ pathLength: 0, opacity: 0 }}
+                        animate={{ pathLength: 1, opacity: 0.6 }}
+                        transition={{ duration: 2.4, delay: path.id * 0.03, ease: "easeOut" }}
                     />
                 ))}
             </svg>
-        </div>
+        </motion.div>
     );
 }
 
