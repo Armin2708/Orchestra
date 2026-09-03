@@ -10,7 +10,7 @@ const cursors = [
 export function Hero() {
   return (
     <>
-      <BackgroundPaths title="Run a team of coding agents that coordinate." ctaLabel="Get Orchestra" ctaHref="#install" />
+      <BackgroundPaths title="Run a team of coding agents that coordinate." ctaLabel="Get Orchestra" ctaHref="#install" variant="contours" />
 
       <div className="hero" style={{ paddingTop: 96 }}>
         <div className="hero-inner" style={{ paddingTop: 0 }}>

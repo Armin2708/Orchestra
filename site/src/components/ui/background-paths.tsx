@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
+import { ContourPaths } from "@/components/ui/contour-paths";
 
 // 21st.dev "Background Paths" — kept verbatim. Only deltas: `ctaLabel`/`ctaHref` props
 // (the button links instead of being a dead control) and no backdrop-blur on the button:
@@ -64,18 +65,27 @@ export function BackgroundPaths({
     title = "Background Paths",
     ctaLabel = "Discover Excellence",
     ctaHref = "#",
+    variant = "strings",
 }: {
     title?: string;
     ctaLabel?: string;
     ctaHref?: string;
+    /** "strings" = the original diagonal fans; "contours" = topographic map (contour-paths.tsx). */
+    variant?: "strings" | "contours";
 }) {
     const words = title.split(" ");
 
     return (
         <div className="relative min-h-screen w-full flex items-center justify-center overflow-hidden bg-white dark:bg-[#0a0c11]">
             <div className="absolute inset-0">
-                <FloatingPaths position={1} />
-                <FloatingPaths position={-1} />
+                {variant === "contours" ? (
+                    <ContourPaths />
+                ) : (
+                    <>
+                        <FloatingPaths position={1} />
+                        <FloatingPaths position={-1} />
+                    </>
+                )}
             </div>
 
             <div className="relative z-10 container mx-auto px-4 md:px-6 text-center">
