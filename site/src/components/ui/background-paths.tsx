@@ -19,7 +19,8 @@ import { Button } from "@/components/ui/button";
  * - no backdrop-blur: together with 72 animated paths it makes Chromium drop
  *   the page layer in headless/software rendering, and it is invisible on a
  *   95% black button anyway.
- * - every third string takes the brand accent instead of white.
+ * - every third string takes the brand accent instead of white; odd strings
+ *   are hidden below the md breakpoint where the band compresses to a ribbon.
  * - the CTA and anything below the title come from the caller (`children`).
  */
 function FloatingPaths({ position, mirror = false }: { position: number; mirror?: boolean }) {
@@ -47,6 +48,7 @@ function FloatingPaths({ position, mirror = false }: { position: number; mirror?
                 {paths.map((path) => (
                     <motion.path
                         key={path.id}
+                        className={path.id % 2 ? "max-md:hidden" : undefined}
                         d={path.d}
                         stroke={path.id % 3 === 0 ? "var(--accent)" : "currentColor"}
                         strokeWidth={path.width}
