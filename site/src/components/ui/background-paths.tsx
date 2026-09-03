@@ -46,6 +46,11 @@ function FloatingPaths({ position }: { position: number }) {
                         transition={{
                             duration: 20 + Math.random() * 10,
                             repeat: Number.POSITIVE_INFINITY,
+                            // mirror instead of loop: with "loop", pathLength snaps from 1 back
+                            // to 0.3 at the end of every cycle — with 72 strings that is a visible
+                            // flicker every ~0.2s. opacity/pathOffset keyframes are symmetric, so
+                            // mirroring changes nothing else.
+                            repeatType: "mirror",
                             ease: "linear",
                         }}
                     />
