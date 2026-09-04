@@ -1,0 +1,23 @@
+# orchestra-web deploys the marketing site only (Vercel Root Directory: site).
+# Keep the upload small: everything heavy in this daemon repo is irrelevant to it.
+/.git
+/.gitnexus
+/node_modules
+/web
+/dist
+/graphify-out
+/artifacts
+/brand
+/supabase
+/test
+/src
+/scripts
+/deploy
+/docs
+/hooks
+/workflows
+/.remember
+/*.png
+/*.jpeg
+site/node_modules
+site/dist
